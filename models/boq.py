@@ -16,7 +16,7 @@ class ConstructionBOQ(models.Model):
           readonly=True, 
           default='New',
           tracking=True
-     )     
+     )    
 
      project_id = fields.Many2one(
           'project.project', 
@@ -39,6 +39,40 @@ class ConstructionBOQ(models.Model):
           string='Company', 
           required=True, 
           default=lambda self: self.env.company
+     )
+
+     # -- Task 2.4: Control Fields --
+     version = fields.Integer(
+          string='Version', 
+          default=1, 
+          required=True, 
+          readonly=True, 
+          copy=False,
+          help="Incremental version number for BOQ revisions."
+     )
+
+     state = fields.Selection([
+          ('draft', 'Draft'),
+          ('submitted', 'Submitted'),
+          ('approved', 'Approved'),
+          ('locked', 'Locked'),   # Consumption allowed state
+          ('closed', 'Closed')
+     ], string='Status', default='draft', required=True, tracking=True, copy=False)
+
+     # -- Task 2.5: Audit Fields --
+     approval_date = fields.Date(
+          string='Approval Date', 
+          readonly=True, 
+          copy=False, 
+          tracking=True
+     )
+
+     approved_by = fields.Many2one(
+          'res.users', 
+          string='Approved By', 
+          readonly=True, 
+          copy=False, 
+          tracking=True
      )
 
      # -- Logic to auto-fill Analytic Account from Project --
