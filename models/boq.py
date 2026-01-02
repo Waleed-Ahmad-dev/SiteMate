@@ -39,17 +39,20 @@ class ConstructionBOQ(models.Model):
         if self.project_id and self.project_id.analytic_account_id:
             self.analytic_account_id = self.project_id.analytic_account_id
 
+    # -------------------------------------------------------------------------
+    # WORKFLOW ACTIONS (Phase 5)
+    # -------------------------------------------------------------------------
+
     def action_submit(self):
-        """
-        Task 5.2: Change state to 'submitted'
-        """
+        """ Task 5.2: Change state to 'submitted' """
         for rec in self:
+            if not rec.boq_line_ids:
+                 raise ValidationError(_('You cannot submit a BOQ with no lines.'))
             rec.write({'state': 'submitted'})
 
     def action_approve(self):
-        """
-        Task 5.3: Change state to 'approved', set approval_date and approved_by
-        """
+        """ Task 5.3: Change state to 'approved' """
+        self._check_boq_before_approval() # Run constraint check explicitly
         for rec in self:
             rec.write({
                 'state': 'approved',
@@ -57,33 +60,32 @@ class ConstructionBOQ(models.Model):
                 'approved_by': self.env.user.id
             })
 
-    @api.constrains('state')
-    def _check_boq_before_approval(self):
-        """
-        Task 5.4: Prevent approval if BOQ has no lines [cite: 127]
-        """
-        for boq in self:
-            if boq.state == 'approved':
-                if not boq.boq_line_ids:
-                    raise ValidationError(_('BOQ cannot be approved without BOQ lines.'))
+    def action_lock(self):
+        """ Change state to 'locked' (Enables consumption) """
+        for rec in self:
+            rec.write({'state': 'locked'})
+
+    def action_close(self):
+        """ Change state to 'closed' """
+        for rec in self:
+            rec.write({'state': 'closed'})
+
+    # -------------------------------------------------------------------------
+    # CONSTRAINTS (Phase 5)
+    # -------------------------------------------------------------------------
 
     @api.constrains('state')
-    def _prevent_edit_on_locked_boq_header(self):
-        """
-        Task 5.5: Prevent editing BOQ header if state is approved or locked.
-        This ensures the BOQ Master definition (Project, Analytic Account) cannot be changed after approval.
-        """
-        for rec in self:
-            if rec.state in ('approved', 'locked'):
-                # We check this during write mostly, but constraint is a safe fallback
-                pass 
-                # Note: In Odoo, preventing writes on the header is usually handled by `write` override 
-                # or view readonly attributes. The constraint below on lines is the critical cost control.
+    def _check_boq_before_approval(self):
+        """ Task 5.4: Prevent approval if BOQ has no lines """
+        for boq in self:
+            if boq.state == 'approved' and not boq.boq_line_ids:
+                raise ValidationError(_('BOQ cannot be approved without BOQ lines.'))
 
     _sql_constraints = [
         ('uniq_project_version', 'unique(project_id, version)', 'A BOQ with this version already exists for this project.'),
         ('uniq_project_state', 'unique(project_id, state)', 'Only one BOQ can be in this state for the project.')
     ]
+
 
 class ConstructionBOQSection(models.Model):
     _name = 'construction.boq.section'
@@ -93,6 +95,7 @@ class ConstructionBOQSection(models.Model):
     name = fields.Char(string='Section Name', required=True)
     boq_id = fields.Many2one('construction.boq', string='BOQ Reference', required=True, ondelete='cascade')
     sequence = fields.Integer(string='Sequence', default=10)
+
 
 class ConstructionBOQLine(models.Model):
     _name = 'construction.boq.line'
@@ -137,12 +140,10 @@ class ConstructionBOQLine(models.Model):
 
     @api.constrains('boq_id', 'product_id', 'quantity', 'estimated_rate', 'description')
     def _prevent_edit_on_locked_boq(self):
-        """
-        Task 5.5: Add Constraint: Prevent editing BOQ if state is approved or locked [cite: 150]
-        """
+        """ Task 5.5: Prevent editing BOQ lines if state is approved or locked """
         for line in self:
-            if line.boq_id.state in ('approved', 'locked'):
-                raise ValidationError(_('Approved BOQs cannot be modified.'))
+            if line.boq_id.state in ('approved', 'locked', 'closed'):
+                raise ValidationError(_('Approved/Locked BOQs cannot be modified.'))
 
     _sql_constraints = [
         ('chk_qty_positive', 'CHECK(quantity > 0)', 'Quantity must be positive.'),
