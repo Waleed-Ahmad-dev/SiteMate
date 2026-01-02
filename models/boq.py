@@ -144,3 +144,40 @@ class ConstructionBOQSection(models.Model):
           default=10,
           help="Used to order the sections in the report"
      )
+
+class ConstructionBOQLine(models.Model):
+     _name = 'construction.boq.line'
+     _description = 'BOQ Line Item'
+     _order = 'sequence, id'
+
+     # -- Relational Fields --
+     boq_id = fields.Many2one(
+          'construction.boq', 
+          string='BOQ Reference', 
+          required=True, 
+          ondelete='cascade',
+          index=True
+     )     
+
+     section_id = fields.Many2one(
+          'construction.boq.section', 
+          string='Section', 
+          domain="[('boq_id', '=', boq_id)]",
+          help="Logical grouping (e.g. Civil Works)"
+     )
+
+     product_id = fields.Many2one(
+          'product.product', 
+          string='Product', 
+          domain="[('company_id', 'in', (company_id, False))]",
+          help="Link to standard Odoo product for auto-completion"
+     )
+
+     company_id = fields.Many2one(
+          related='boq_id.company_id', 
+          string='Company', 
+          store=True, 
+          readonly=True
+     )
+
+     sequence = fields.Integer(string='Sequence', default=10)
