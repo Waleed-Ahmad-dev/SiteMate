@@ -75,7 +75,7 @@ class ConstructionBOQ(models.Model):
           tracking=True
      )
 
-     # -- Financial Fields (Total Budget) --
+     # -- Financial Fields --
      currency_id = fields.Many2one(
           'res.currency', 
           related='company_id.currency_id', 
@@ -83,7 +83,6 @@ class ConstructionBOQ(models.Model):
           readonly=True
      )
 
-     # UPDATED: Now links to the actual lines
      boq_line_ids = fields.One2many(
           'construction.boq.line', 
           'boq_id', 
@@ -99,19 +98,19 @@ class ConstructionBOQ(models.Model):
           help="Sum of all BOQ Lines"
      )
 
-     # UPDATED: Real computation logic
+     # -- Compute Logic --
      @api.depends('boq_line_ids.budget_amount', 'currency_id')
      def _compute_total_budget(self):
           for rec in self:
                rec.total_budget = sum(rec.boq_line_ids.mapped('budget_amount'))
 
-     # -- Logic to auto-fill Analytic Account from Project --
+     # -- Onchange Logic --
      @api.onchange('project_id')
      def _onchange_project_id(self):
           if self.project_id and self.project_id.analytic_account_id:
                self.analytic_account_id = self.project_id.analytic_account_id
 
-     # -- SQL Constraints --
+     # -- Master SQL Constraints --
      _sql_constraints = [
           ('uniq_project_version', 
           'unique(project_id, version)', 
@@ -140,11 +139,7 @@ class ConstructionBOQSection(models.Model):
           ondelete='cascade'
      )
 
-     sequence = fields.Integer(
-          string='Sequence', 
-          default=10,
-          help="Used to order the sections in the report"
-     )
+     sequence = fields.Integer(string='Sequence', default=10)
 
 class ConstructionBOQLine(models.Model):
      _name = 'construction.boq.line'
@@ -199,9 +194,9 @@ class ConstructionBOQLine(models.Model):
           ('service', 'Service'),
           ('overhead', 'Overhead')
      ], string='Cost Type', required=True, default='material')
-     
+
      quantity = fields.Float(string='Quantity', default=1.0, required=True)
-     
+
      uom_id = fields.Many2one('uom.uom', string='Unit of Measure', required=True)
 
      estimated_rate = fields.Monetary(
@@ -211,7 +206,7 @@ class ConstructionBOQLine(models.Model):
           required=True
      )
 
-     # -- Computed Budget Amount --
+     # -- Computed Budget --
      budget_amount = fields.Monetary(
           string='Budget Amount', 
           compute='_compute_budget_amount', 
@@ -219,15 +214,29 @@ class ConstructionBOQLine(models.Model):
           store=True
      )
 
+     # -- Accounting Fields (Odoo 18 Compatible) --
+     expense_account_id = fields.Many2one(
+          'account.account',
+          string='Expense Account',
+          required=True,
+          domain="[('deprecated', '=', False), ('company_id', '=', company_id)]",
+          help="The GL account where expenses will be booked."
+     )
+
      @api.depends('quantity', 'estimated_rate')
      def _compute_budget_amount(self):
           for rec in self:
                rec.budget_amount = rec.quantity * rec.estimated_rate
 
-     # -- Auto-fill UOM and Name from Product --
      @api.onchange('product_id')
      def _onchange_product_id(self):
           if self.product_id:
                self.description = self.product_id.name
                self.uom_id = self.product_id.uom_id
                self.estimated_rate = self.product_id.standard_price
+
+     # -- Line Constraints --
+     _sql_constraints = [
+          ('chk_qty_positive', 'CHECK(quantity > 0)', 'Quantity must be positive.'),
+          ('chk_amount_positive', 'CHECK(budget_amount >= 0)', 'Budget amount cannot be negative.')
+     ]
