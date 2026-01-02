@@ -28,8 +28,7 @@
           # 'hr_timesheet', # Optional: labor costing 
      ],
      'data': [
-          # We will add security and views here in later tasks
-          # 'security/ir.model.access.csv',
+          'security/ir.model.access.csv',
           'views/boq_views.xml',
      ],
      'installable': True,
