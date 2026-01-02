@@ -5,7 +5,7 @@ from odoo.exceptions import ValidationError
 class ConstructionBOQ(models.Model):
      _name = 'construction.boq'
      _description = 'Construction Bill of Quantities'
-     _inherit = ['mail.thread', 'mail.activity.mixin'] # Enables chatter and audit trail
+     _inherit = ['mail.thread', 'mail.activity.mixin']
      _order = 'id desc'
 
      # -- Basic Identifier Fields --
@@ -83,6 +83,13 @@ class ConstructionBOQ(models.Model):
           readonly=True
      )
 
+     # UPDATED: Now links to the actual lines
+     boq_line_ids = fields.One2many(
+          'construction.boq.line', 
+          'boq_id', 
+          string='BOQ Lines'
+     )
+
      total_budget = fields.Monetary(
           string='Total Budget', 
           compute='_compute_total_budget', 
@@ -92,16 +99,11 @@ class ConstructionBOQ(models.Model):
           help="Sum of all BOQ Lines"
      )
 
-     # Placeholder for Lines (We will define this fully in Phase 3)
-     # boq_line_ids = fields.One2many('construction.boq.line', 'boq_id', string='BOQ Lines')
-
-     @api.depends('currency_id') # We will add 'boq_line_ids.budget_amount' here in Phase 3
+     # UPDATED: Real computation logic
+     @api.depends('boq_line_ids.budget_amount', 'currency_id')
      def _compute_total_budget(self):
           for rec in self:
-               # Placeholder logic until we create the Lines model
-               rec.total_budget = 0.0
-               # Future Logic:
-               # rec.total_budget = sum(rec.boq_line_ids.mapped('budget_amount'))
+               rec.total_budget = sum(rec.boq_line_ids.mapped('budget_amount'))
 
      # -- Logic to auto-fill Analytic Account from Project --
      @api.onchange('project_id')
@@ -114,8 +116,7 @@ class ConstructionBOQ(models.Model):
           ('uniq_project_version', 
           'unique(project_id, version)', 
           'A BOQ with this version already exists for this project.'),
-          
-          # Enforces one BOQ per state per project (e.g., only 1 Draft, 1 Approved)
+
           ('uniq_project_state', 
           'unique(project_id, state)', 
           'Only one BOQ can be in this state for the project.')
@@ -136,7 +137,7 @@ class ConstructionBOQSection(models.Model):
           'construction.boq', 
           string='BOQ Reference', 
           required=True, 
-          ondelete='cascade' # If BOQ is deleted, delete sections too
+          ondelete='cascade'
      )
 
      sequence = fields.Integer(
@@ -157,7 +158,7 @@ class ConstructionBOQLine(models.Model):
           required=True, 
           ondelete='cascade',
           index=True
-     )     
+     )
 
      section_id = fields.Many2one(
           'construction.boq.section', 
@@ -180,4 +181,53 @@ class ConstructionBOQLine(models.Model):
           readonly=True
      )
 
+     currency_id = fields.Many2one(
+          related='company_id.currency_id',
+          string='Currency',
+          readonly=True
+     )
+
      sequence = fields.Integer(string='Sequence', default=10)
+
+     # -- Cost Fields --
+     description = fields.Text(string='Description', required=True)
+
+     cost_type = fields.Selection([
+          ('material', 'Material'),
+          ('labor', 'Labor'),
+          ('subcontract', 'Subcontract'),
+          ('service', 'Service'),
+          ('overhead', 'Overhead')
+     ], string='Cost Type', required=True, default='material')
+     
+     quantity = fields.Float(string='Quantity', default=1.0, required=True)
+     
+     uom_id = fields.Many2one('uom.uom', string='Unit of Measure', required=True)
+
+     estimated_rate = fields.Monetary(
+          string='Rate', 
+          currency_field='currency_id', 
+          default=0.0, 
+          required=True
+     )
+
+     # -- Computed Budget Amount --
+     budget_amount = fields.Monetary(
+          string='Budget Amount', 
+          compute='_compute_budget_amount', 
+          currency_field='currency_id',
+          store=True
+     )
+
+     @api.depends('quantity', 'estimated_rate')
+     def _compute_budget_amount(self):
+          for rec in self:
+               rec.budget_amount = rec.quantity * rec.estimated_rate
+
+     # -- Auto-fill UOM and Name from Product --
+     @api.onchange('product_id')
+     def _onchange_product_id(self):
+          if self.product_id:
+               self.description = self.product_id.name
+               self.uom_id = self.product_id.uom_id
+               self.estimated_rate = self.product_id.standard_price
