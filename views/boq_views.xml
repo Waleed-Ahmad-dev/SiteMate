@@ -53,7 +53,9 @@
                                     </control>
                                     
                                     <field name="sequence" widget="handle"/>
-                                    <field name="display_type" column_invisible="1"/> 
+                                    <field name="display_type" column_invisible="1"/>
+                                    <field name="company_id" column_invisible="1"/> 
+                                    
                                     <field name="section_id" optional="hide"/>
                                     <field name="product_id"/>
                                     <field name="description"/>
@@ -62,6 +64,7 @@
                                     <field name="uom_id"/>
                                     <field name="estimated_rate"/>
                                     <field name="budget_amount" widget="monetary" sum="Total"/>
+                                    
                                     <field name="expense_account_id" optional="show"/>
                                     <field name="currency_id" column_invisible="1"/>
                                 </list>
