@@ -75,8 +75,48 @@ class ConstructionBOQ(models.Model):
           tracking=True
      )
 
+     # -- Financial Fields (Total Budget) --
+     currency_id = fields.Many2one(
+          'res.currency', 
+          related='company_id.currency_id', 
+          string='Currency', 
+          readonly=True
+     )
+
+     total_budget = fields.Monetary(
+          string='Total Budget', 
+          compute='_compute_total_budget', 
+          currency_field='currency_id',
+          store=True,
+          tracking=True,
+          help="Sum of all BOQ Lines"
+     )
+
+     # Placeholder for Lines (We will define this fully in Phase 3)
+     # boq_line_ids = fields.One2many('construction.boq.line', 'boq_id', string='BOQ Lines')
+
+     @api.depends('currency_id') # We will add 'boq_line_ids.budget_amount' here in Phase 3
+     def _compute_total_budget(self):
+          for rec in self:
+               # Placeholder logic until we create the Lines model
+               rec.total_budget = 0.0
+               # Future Logic:
+               # rec.total_budget = sum(rec.boq_line_ids.mapped('budget_amount'))
+
      # -- Logic to auto-fill Analytic Account from Project --
      @api.onchange('project_id')
      def _onchange_project_id(self):
           if self.project_id and self.project_id.analytic_account_id:
                self.analytic_account_id = self.project_id.analytic_account_id
+
+     # -- SQL Constraints --
+     _sql_constraints = [
+          ('uniq_project_version', 
+          'unique(project_id, version)', 
+          'A BOQ with this version already exists for this project.'),
+          
+          # Enforces one BOQ per state per project (e.g., only 1 Draft, 1 Approved)
+          ('uniq_project_state', 
+          'unique(project_id, state)', 
+          'Only one BOQ can be in this state for the project.')
+     ]
