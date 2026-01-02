@@ -21,6 +21,10 @@
         <field name="arch" type="xml">
             <form string="Construction BOQ">
                 <header>
+                    <button name="action_submit" string="Submit" type="object" class="oe_highlight" invisible="state != 'draft'"/>
+                    <button name="action_approve" string="Approve" type="object" class="oe_highlight" invisible="state != 'submitted'"/>
+                    <button name="action_lock" string="Lock" type="object" class="oe_highlight" invisible="state != 'approved'"/>
+                    <button name="action_close" string="Close" type="object" invisible="state not in ('approved', 'locked')"/>
                     <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved,locked"/>
                 </header>
                 <sheet>
@@ -51,11 +55,11 @@
                                         <create name="add_line_control" string="Add a line"/>
                                         <create name="add_section_control" string="Add a section" context="{'default_display_type': 'line_section'}"/>
                                     </control>
-                                    
+                                   
                                     <field name="sequence" widget="handle"/>
                                     <field name="display_type" column_invisible="1"/>
                                     <field name="company_id" column_invisible="1"/>
-                                    
+                                   
                                     <field name="section_id" optional="hide"/>
                                     <field name="product_id"/>
                                     <field name="description"/>
@@ -68,7 +72,7 @@
                                     <field name="currency_id" column_invisible="1"/>
                                 </list>
                             </field>
-                            
+                           
                             <group name="note_group" col="6" class="mt-2 mt-md-0">
                                 <group class="oe_subtotal_footer oe_right" colspan="2" name="sale_total">
                                     <field name="total_budget" widget="monetary"/>
