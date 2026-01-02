@@ -39,6 +39,13 @@ class ConstructionBOQ(models.Model):
         if self.project_id and self.project_id.analytic_account_id:
             self.analytic_account_id = self.project_id.analytic_account_id
 
+    def action_submit(self):
+        """
+        Task 5.2: Change state to 'submitted'
+        """
+        for rec in self:
+            rec.write({'state': 'submitted'})
+
     _sql_constraints = [
         ('uniq_project_version', 'unique(project_id, version)', 'A BOQ with this version already exists for this project.'),
         ('uniq_project_state', 'unique(project_id, state)', 'Only one BOQ can be in this state for the project.')
@@ -61,25 +68,25 @@ class ConstructionBOQLine(models.Model):
     boq_id = fields.Many2one('construction.boq', string='BOQ Reference', required=True, ondelete='cascade', index=True)
     section_id = fields.Many2one('construction.boq.section', string='Section', domain="[('boq_id', '=', boq_id)]")
     product_id = fields.Many2one('product.product', string='Product', domain="[('company_id', 'in', (company_id, False))]")
-    
+   
     company_id = fields.Many2one(related='boq_id.company_id', string='Company', store=True, readonly=True)
     currency_id = fields.Many2one(related='company_id.currency_id', string='Currency', readonly=True)
     sequence = fields.Integer(string='Sequence', default=10)
-    
+   
     display_type = fields.Selection([('line_section', "Section"), ('line_note', "Note")], default=False)
 
     description = fields.Text(string='Description', required=True)
     cost_type = fields.Selection([
-        ('material', 'Material'), ('labor', 'Labor'), 
-        ('subcontract', 'Subcontract'), ('service', 'Service'), 
+        ('material', 'Material'), ('labor', 'Labor'),
+        ('subcontract', 'Subcontract'), ('service', 'Service'),
         ('overhead', 'Overhead')], string='Cost Type', required=True, default='material')
-    
+
     quantity = fields.Float(string='Quantity', default=1.0, required=True)
     uom_id = fields.Many2one('uom.uom', string='Unit of Measure', required=True)
     estimated_rate = fields.Monetary(string='Rate', currency_field='currency_id', default=0.0, required=True)
     budget_amount = fields.Monetary(string='Budget Amount', compute='_compute_budget_amount', currency_field='currency_id', store=True)
 
-    expense_account_id = fields.Many2one('account.account', string='Expense Account', required=True, 
+    expense_account_id = fields.Many2one('account.account', string='Expense Account', required=True,
                                          domain="[('deprecated', '=', False), ('company_id', '=', company_id)]")
 
     @api.depends('quantity', 'estimated_rate')
