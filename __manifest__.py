@@ -30,7 +30,7 @@
      'data': [
           # We will add security and views here in later tasks
           # 'security/ir.model.access.csv',
-          # 'views/boq_views.xml',
+          'views/boq_views.xml',
      ],
      'installable': True,
      'application': True,
