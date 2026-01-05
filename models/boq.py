@@ -8,7 +8,9 @@ class ConstructionBOQ(models.Model):
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'id desc'
 
-    name = fields.Char(string='BOQ Reference', required=True, copy=False, readonly=True, default='New', tracking=True)
+    # FIX 1: Removed readonly=True so you can rename the BOQ
+    name = fields.Char(string='BOQ Reference', required=True, copy=False, default='New', tracking=True)
+    
     project_id = fields.Many2one('project.project', string='Project', required=True, tracking=True)
     analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', required=True, tracking=True)
     company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
@@ -33,7 +35,7 @@ class ConstructionBOQ(models.Model):
 
     @api.onchange('project_id')
     def _onchange_project_id(self):
-        # FIX: Odoo 18 uses account_id
+        # FIX 2: Updated to use 'account_id' which is the correct field name in Odoo 18
         if self.project_id and self.project_id.account_id:
             self.analytic_account_id = self.project_id.account_id
 
@@ -99,7 +101,6 @@ class ConstructionBOQLine(models.Model):
     uom_id = fields.Many2one('uom.uom', string='Unit of Measure', required=True)
     estimated_rate = fields.Monetary(string='Rate', currency_field='currency_id', default=0.0, required=True)
     budget_amount = fields.Monetary(string='Budget Amount', compute='_compute_budget_amount', currency_field='currency_id', store=True)
-    # FIX: check_company=True allows safer handling without domain issues
     expense_account_id = fields.Many2one('account.account', string='Expense Account', required=True, check_company=True)
     analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
     consumed_quantity = fields.Float(string='Consumed Qty', compute='_compute_consumption', store=True)
