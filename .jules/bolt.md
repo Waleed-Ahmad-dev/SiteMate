@@ -1,0 +1,3 @@
+## 2024-05-23 - Batch Write and N+1 Optimization in Odoo Models
+**Learning:** Odoo's ORM often tempts developers to write logic in loops (`for rec in self`), which leads to N+1 queries (`search` inside loop) and N write transactions (`write` inside loop).
+**Action:** always check `self` methods for loops containing `search`, `write`, or `create`. Refactor `write` to `self.write()` where possible. Refactor validation searches to use `domain` with `in` operators to check the entire batch in one query. Use `Counter` for in-memory batch duplicate checks.

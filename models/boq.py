@@ -43,21 +43,22 @@ class ConstructionBOQ(models.Model):
         for rec in self:
             if not rec.boq_line_ids:
                  raise ValidationError(_('You cannot submit a BOQ with no lines.'))
-            rec.write({'state': 'submitted'})
+        self.write({'state': 'submitted'})
 
     def action_approve(self):
         self._check_boq_before_approval()
         self._check_one_active_boq()
-        for rec in self:
-            rec.write({'state': 'approved', 'approval_date': fields.Date.today(), 'approved_by': self.env.user.id})
+        self.write({
+            'state': 'approved',
+            'approval_date': fields.Date.today(),
+            'approved_by': self.env.user.id
+        })
 
     def action_lock(self):
-        for rec in self:
-            rec.write({'state': 'locked'})
+        self.write({'state': 'locked'})
 
     def action_close(self):
-        for rec in self:
-            rec.write({'state': 'closed'})
+        self.write({'state': 'closed'})
 
     @api.constrains('state')
     def _check_boq_before_approval(self):
@@ -66,10 +67,24 @@ class ConstructionBOQ(models.Model):
                 raise ValidationError(_('BOQ cannot be approved without BOQ lines.'))
 
     def _check_one_active_boq(self):
-        for rec in self:
-            domain = [('project_id', '=', rec.project_id.id), ('state', 'in', ['approved', 'locked']), ('id', '!=', rec.id)]
-            if self.search_count(domain) > 0:
-                raise ValidationError(_('There is already an active (Approved or Locked) BOQ for this project.'))
+        # 1. Check for duplicates within the batch
+        project_ids = self.mapped('project_id')
+        if len(project_ids) < len(self):
+            from collections import Counter
+            project_counts = Counter(rec.project_id for rec in self)
+            for project, count in project_counts.items():
+                if count > 1:
+                    raise ValidationError(_('You cannot approve multiple BOQs for project %s at the same time.') % project.name)
+
+        # 2. Check against DB
+        domain = [
+            ('project_id', 'in', project_ids.ids),
+            ('state', 'in', ['approved', 'locked']),
+            ('id', 'not in', self.ids)
+        ]
+        active_boq = self.search(domain, limit=1)
+        if active_boq:
+            raise ValidationError(_('There is already an active (Approved or Locked) BOQ for project %s.') % active_boq.project_id.name)
 
     _sql_constraints = [('uniq_project_version', 'unique(project_id, version)', 'A BOQ with this version already exists for this project.')]
 
