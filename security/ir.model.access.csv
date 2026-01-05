@@ -1,4 +1,5 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_construction_boq,construction.boq,model_construction_boq,base.group_user,1,1,1,1
-access_construction_boq_section,construction.boq.section,model_construction_boq_section,base.group_user,1,1,1,1
-access_construction_boq_line,construction.boq.line,model_construction_boq_line,base.group_user,1,1,1,1
+id,                                  name,                         model_id:id,                        group_id:id,     perm_read, perm_write, perm_create, perm_unlink
+access_construction_boq,             construction.boq,             model_construction_boq,             base.group_user, 1,         1,          1,           1
+access_construction_boq_section,     construction.boq.section,     model_construction_boq_section,     base.group_user, 1,         1,          1,           1
+access_construction_boq_line,        construction.boq.line,        model_construction_boq_line,        base.group_user, 1,         1,          1,           1
+access_construction_boq_consumption, construction.boq.consumption, model_construction_boq_consumption, base.group_user, 1,         1,          1,           1
