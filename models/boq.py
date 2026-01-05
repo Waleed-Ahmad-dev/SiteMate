@@ -8,10 +8,6 @@ class ConstructionBOQ(models.Model):
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'id desc'
 
-    # ==========================================================================
-    #                                  FIELDS
-    # ==========================================================================
-    
     name = fields.Char(
         string='BOQ Reference', 
         required=True, 
@@ -94,39 +90,25 @@ class ConstructionBOQ(models.Model):
         tracking=True
     )
 
-    # ==========================================================================
-    #                                COMPUTE METHODS
-    # ==========================================================================
-
     @api.depends('boq_line_ids.budget_amount', 'currency_id')
     def _compute_total_budget(self):
         for rec in self:
             rec.total_budget = sum(rec.boq_line_ids.mapped('budget_amount'))
-
-    # ==========================================================================
-    #                                ONCHANGE METHODS
-    # ==========================================================================
 
     @api.onchange('project_id')
     def _onchange_project_id(self):
         if self.project_id and self.project_id.analytic_account_id:
             self.analytic_account_id = self.project_id.analytic_account_id
 
-    # ==========================================================================
-    #                                WORKFLOW ACTIONS
-    # ==========================================================================
-
     def action_submit(self):
-        """ Task 5.2: Change state to 'submitted' """
         for rec in self:
             if not rec.boq_line_ids:
                  raise ValidationError(_('You cannot submit a BOQ with no lines.'))
             rec.write({'state': 'submitted'})
 
     def action_approve(self):
-        """ Task 5.3: Change state to 'approved' """
-        self._check_boq_before_approval()  # Run constraint check explicitly
-        self._check_one_active_boq()       # Ensure no other active BOQ exists
+        self._check_boq_before_approval()
+        self._check_one_active_boq()
         for rec in self:
             rec.write({
                 'state': 'approved',
@@ -135,28 +117,20 @@ class ConstructionBOQ(models.Model):
             })
 
     def action_lock(self):
-        """ Change state to 'locked' (Enables consumption) """
         for rec in self:
             rec.write({'state': 'locked'})
 
     def action_close(self):
-        """ Change state to 'closed' """
         for rec in self:
             rec.write({'state': 'closed'})
 
-    # ==========================================================================
-    #                                 CONSTRAINTS
-    # ==========================================================================
-
     @api.constrains('state')
     def _check_boq_before_approval(self):
-        """ Task 5.4: Prevent approval if BOQ has no lines """
         for boq in self:
             if boq.state == 'approved' and not boq.boq_line_ids:
                 raise ValidationError(_('BOQ cannot be approved without BOQ lines.'))
 
     def _check_one_active_boq(self):
-        """ Task 10.1: Ensure only one Active (Approved/Locked) BOQ per project. """
         for rec in self:
             domain = [
                 ('project_id', '=', rec.project_id.id),
@@ -185,10 +159,6 @@ class ConstructionBOQLine(models.Model):
     _name = 'construction.boq.line'
     _description = 'BOQ Line Item'
     _order = 'sequence, id'
-
-    # ==========================================================================
-    #                                  FIELDS
-    # ==========================================================================
 
     boq_id = fields.Many2one(
         'construction.boq', 
@@ -232,7 +202,6 @@ class ConstructionBOQLine(models.Model):
         default=False
     )
 
-    # ADDED: Name field required for Section Widget to display correctly
     name = fields.Char(string='Description', required=True) 
     description = fields.Text(string='Long Description') 
     
@@ -277,7 +246,6 @@ class ConstructionBOQLine(models.Model):
         store=True
     )
 
-    # ADDED: Consumption Tracking Fields [Task 5.3]
     consumed_quantity = fields.Float(
         string='Consumed Qty', 
         compute='_compute_consumption', 
@@ -313,10 +281,6 @@ class ConstructionBOQLine(models.Model):
         string='Consumptions'
     )
 
-    # ==========================================================================
-    #                                COMPUTE & ONCHANGE
-    # ==========================================================================
-
     @api.depends('quantity', 'estimated_rate')
     def _compute_budget_amount(self):
         for rec in self:
@@ -324,7 +288,6 @@ class ConstructionBOQLine(models.Model):
 
     @api.depends('quantity', 'budget_amount', 'consumption_ids.quantity', 'consumption_ids.amount')
     def _compute_consumption(self):
-        """ Calculates consumed and remaining values based on ledger entries """
         for rec in self:
             rec.consumed_quantity = sum(rec.consumption_ids.mapped('quantity'))
             rec.consumed_amount = sum(rec.consumption_ids.mapped('amount'))
@@ -339,20 +302,14 @@ class ConstructionBOQLine(models.Model):
             self.uom_id = self.product_id.uom_id
             self.estimated_rate = self.product_id.standard_price
 
-    # ==========================================================================
-    #                                 CONSTRAINTS
-    # ==========================================================================
-
     @api.constrains('boq_id', 'product_id', 'quantity', 'estimated_rate', 'name')
     def _prevent_edit_on_locked_boq(self):
-        """ Task 5.5: Prevent editing BOQ lines if state is approved or locked """
         for line in self:
             if line.boq_id.state in ('approved', 'locked', 'closed'):
                 raise ValidationError(_('Approved/Locked BOQs cannot be modified.'))
 
     @api.constrains('analytic_account_id', 'boq_id')
     def _check_project_alignment(self):
-        """ Task 10.2: Cross-Project Integrity Validation """
         for rec in self:
             if rec.boq_id.analytic_account_id and rec.analytic_account_id:
                 if rec.boq_id.analytic_account_id != rec.analytic_account_id:
@@ -361,12 +318,10 @@ class ConstructionBOQLine(models.Model):
     _sql_constraints = [
         ('chk_qty_positive', 'CHECK(quantity > 0)', 'Quantity must be positive.'),
         ('chk_amount_positive', 'CHECK(budget_amount >= 0)', 'Budget amount cannot be negative.'),
-        # ADDED: Unique Constraint [Task 10.1]
         ('uniq_boq_product_section', 'unique(boq_id, section_id, product_id)', 'Duplicate product in the same section is not allowed.')
     ]
 
 
-# ADDED: Missing Consumption Ledger Model [Task 5.6]
 class ConstructionBOQConsumption(models.Model):
     _name = 'construction.boq.consumption'
     _description = 'BOQ Consumption Ledger'
