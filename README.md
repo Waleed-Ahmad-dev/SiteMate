@@ -106,4 +106,4 @@ See the [LICENSE](LICENSE) file for the full text.
 ## ✍️ Author
 
 **ELB Marketing**
-[https://www.entrpryz.com](https://www.entrpryz.com)
+[https://www.entrpryz.com](https://entrpryz.com)
