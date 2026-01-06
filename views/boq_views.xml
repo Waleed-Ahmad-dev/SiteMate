@@ -57,6 +57,10 @@
                                     <field name="display_type" column_invisible="1"/>
                                     <field name="company_id" column_invisible="1"/>
                                     <field name="section_id" optional="hide"/>
+                                    
+                                    <field name="task_id" optional="show" domain="[('project_id', '=', parent.project_id)]" options="{'no_create': True}"/>
+                                    <field name="activity_code" optional="show"/>
+                                    
                                     <field name="product_id"/>
                                     <field name="name" widget="section_and_note_text"/>
                                     <field name="cost_type" optional="show"/>
