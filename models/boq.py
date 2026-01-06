@@ -8,9 +8,7 @@ class ConstructionBOQ(models.Model):
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'id desc'
 
-    # FIX 1: Removed readonly=True so you can rename the BOQ
     name = fields.Char(string='BOQ Reference', required=True, copy=False, default='New', tracking=True)
-    
     project_id = fields.Many2one('project.project', string='Project', required=True, tracking=True)
     analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', required=True, tracking=True)
     company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
@@ -22,11 +20,16 @@ class ConstructionBOQ(models.Model):
         ('locked', 'Locked'),
         ('closed', 'Closed')
     ], string='Status', default='draft', required=True, tracking=True, copy=False)
+    
     approval_date = fields.Date(string='Approval Date', readonly=True, copy=False, tracking=True)
     approved_by = fields.Many2one('res.users', string='Approved By', readonly=True, copy=False, tracking=True)
     currency_id = fields.Many2one('res.currency', related='company_id.currency_id', string='Currency', readonly=True)
+    
     boq_line_ids = fields.One2many('construction.boq.line', 'boq_id', string='BOQ Lines')
     total_budget = fields.Monetary(string='Total Budget', compute='_compute_total_budget', currency_field='currency_id', store=True, tracking=True)
+    
+    # NEW: Link to revisions
+    revision_ids = fields.One2many('construction.boq.revision', 'original_boq_id', string='Revisions')
 
     @api.depends('boq_line_ids.budget_amount', 'currency_id')
     def _compute_total_budget(self):
@@ -35,7 +38,6 @@ class ConstructionBOQ(models.Model):
 
     @api.onchange('project_id')
     def _onchange_project_id(self):
-        # FIX 2: Updated to use 'account_id' which is the correct field name in Odoo 18
         if self.project_id and self.project_id.account_id:
             self.analytic_account_id = self.project_id.account_id
 
@@ -58,6 +60,21 @@ class ConstructionBOQ(models.Model):
     def action_close(self):
         for rec in self:
             rec.write({'state': 'closed'})
+
+    # NEW: Revision Action
+    def action_revise(self):
+        self.ensure_one()
+        if self.state not in ['approved', 'locked']:
+             raise ValidationError(_("Only 'Approved' or 'Locked' BOQs can be revised."))
+             
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Revise BOQ'),
+            'res_model': 'construction.boq.revision.wizard',
+            'view_mode': 'form',
+            'target': 'new',
+            'context': {'default_boq_id': self.id}
+        }
 
     @api.constrains('state')
     def _check_boq_before_approval(self):
@@ -101,8 +118,13 @@ class ConstructionBOQLine(models.Model):
     uom_id = fields.Many2one('uom.uom', string='Unit of Measure', required=True)
     estimated_rate = fields.Monetary(string='Rate', currency_field='currency_id', default=0.0, required=True)
     budget_amount = fields.Monetary(string='Budget Amount', compute='_compute_budget_amount', currency_field='currency_id', store=True)
+    
     expense_account_id = fields.Many2one('account.account', string='Expense Account', required=True, check_company=True)
     analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
+
+    # NEW: Replaced obsolete 'analytic_tag_id' with 'analytic_distribution' for Odoo 18 compatibility
+    analytic_distribution = fields.Json(string='Analytic Distribution')
+
     consumed_quantity = fields.Float(string='Consumed Qty', compute='_compute_consumption', store=True)
     consumed_amount = fields.Monetary(string='Consumed Amount', compute='_compute_consumption', currency_field='currency_id', store=True)
     remaining_quantity = fields.Float(string='Remaining Qty', compute='_compute_consumption', store=True)
