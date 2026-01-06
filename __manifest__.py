@@ -12,6 +12,7 @@
         'views/boq_views.xml',
         'views/purchase_views.xml',
         'views/stock_views.xml',
+        'views/account_move_views.xml',
     ],
     'installable': True,
     'application': True,
