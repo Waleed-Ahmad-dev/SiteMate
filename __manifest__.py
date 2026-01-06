@@ -10,6 +10,7 @@
     'data': [
         'security/security.xml',
         'security/ir.model.access.csv',
+        'views/project_task_views.xml',
         'views/boq_views.xml',
         'views/purchase_views.xml',
         'views/stock_views.xml',
