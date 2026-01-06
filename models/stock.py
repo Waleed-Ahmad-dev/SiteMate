@@ -6,7 +6,7 @@ from odoo.exceptions import ValidationError
 class StockMove(models.Model):
     _inherit = 'stock.move'
 
-    [cite_start]# [cite: 75] Link this move to a BOQ line for budget tracking.
+# [cite: 75] Link this move to a BOQ line for budget tracking.
     boq_line_id = fields.Many2one(
         'construction.boq.line',
         string='BOQ Line',
@@ -22,7 +22,7 @@ class StockMove(models.Model):
     @api.constrains('boq_line_id', 'product_id')
     def _check_boq_product_match(self):
         """
-        [cite_start][cite: 75] Verify stock move product matches the BOQ line product.
+            Verify stock move product matches the BOQ line product.
         """
         for move in self:
             if move.boq_line_id and move.boq_line_id.product_id != move.product_id:
@@ -37,7 +37,7 @@ class StockMove(models.Model):
     def _get_dest_account(self, accounts_data):
         """
         Override the destination account for stock valuation.
-        [cite_start][cite: 77] Valuation posted to BOQ expense account.
+        Valuation posted to BOQ expense account.
         
         If this move is linked to a BOQ Line and is being issued out (Customer/Production),
         we override the default Category Expense Account with the BOQ Line's Expense Account.
@@ -55,7 +55,6 @@ class StockMove(models.Model):
 
     def _prepare_account_move_line(self, qty, cost, credit_account_id, debit_account_id, description):
         """
-        [cite_start]Subtask 4.2: Propagate Analytics to Stock Moves [cite: 88]
         Inject analytic distribution from BOQ Line into the Stock Journal Entry.
         This ensures that when a stock move is posted, the resulting Journal Entry carries 
         the Project/Analytic Account defined in the BOQ.
@@ -82,8 +81,8 @@ class StockMove(models.Model):
     def _action_done(self, cancel_backorder=False):
         """
         Override _action_done to:
-        [cite_start]1. [cite: 162] Enforce BOQ limits (Validation)
-        [cite_start]2. [cite: 75, 76] Create Consumption Ledger entries (Recording)
+        1. Enforce BOQ limits (Validation)
+        2. Create Consumption Ledger entries (Recording)
         """
         # 1. PRE-VALIDATION PHASE (Before move is Done)
         for move in self:
@@ -96,7 +95,7 @@ class StockMove(models.Model):
                 if qty_to_process <= 0:
                     continue
 
-                [cite_start]# [cite: 76, 162] Check BOQ Limit
+                # Check BOQ Limit
                 if not move.boq_line_id.allow_over_consumption:
                     # Compare against remaining quantity
                     if qty_to_process > move.boq_line_id.remaining_quantity:
@@ -126,7 +125,7 @@ class StockMove(models.Model):
                     price_unit = abs(move.price_unit) # Standard Cost / Moving Average Cost
                     amount_consumed = price_unit * move.quantity
 
-                    [cite_start]# [cite: 75] Create Consumption Entry
+                    # [cite: 75] Create Consumption Entry
                     Consumption.create({
                         'boq_line_id': move.boq_line_id.id,
                         'source_model': 'stock.move',
