@@ -188,7 +188,7 @@ class ConstructionBOQLine(models.Model):
     def check_consumption(self, qty, amount):
         self.ensure_one()
         if not self.allow_over_consumption:
-            if qty > self.remaining_quantity + 0.0001: 
+            if qty > self.remaining_quantity + 0.0001:
                  raise ValidationError(_(
                     'BOQ Quantity Exceeded for %s.\nAttempting to consume: %s\nRemaining: %s'
                 ) % (self.name, qty, self.remaining_quantity))
@@ -217,3 +217,15 @@ class ConstructionBOQConsumption(models.Model):
     currency_id = fields.Many2one('res.currency', related='boq_line_id.currency_id', store=True)
     date = fields.Date(string='Date', default=fields.Date.context_today, required=True)
     user_id = fields.Many2one('res.users', string='User', default=lambda self: self.env.user)
+
+    def init(self):
+        """
+        [cite_start]Subtask 3.1: Implement Ledger Immutability (SQL) [cite: 119-121]
+        Prevent any module (even via RPC) from updating or deleting consumption records.
+        Ledger is append-only.
+        """
+        # Ensure the table exists before modifying permissions
+        # (Odoo creates it automatically, but init hooks run after model loading)
+        self.env.cr.execute("""
+            REVOKE UPDATE, DELETE ON construction_boq_consumption FROM PUBLIC;
+        """)
