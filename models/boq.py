@@ -28,7 +28,6 @@ class ConstructionBOQ(models.Model):
     boq_line_ids = fields.One2many('construction.boq.line', 'boq_id', string='BOQ Lines')
     total_budget = fields.Monetary(string='Total Budget', compute='_compute_total_budget', currency_field='currency_id', store=True, tracking=True)
     
-    # NEW: Link to revisions
     revision_ids = fields.One2many('construction.boq.revision', 'original_boq_id', string='Revisions')
 
     @api.depends('boq_line_ids.budget_amount', 'currency_id')
@@ -61,12 +60,10 @@ class ConstructionBOQ(models.Model):
         for rec in self:
             rec.write({'state': 'closed'})
 
-    # NEW: Revision Action
     def action_revise(self):
         self.ensure_one()
         if self.state not in ['approved', 'locked']:
              raise ValidationError(_("Only 'Approved' or 'Locked' BOQs can be revised."))
-             
         return {
             'type': 'ir.actions.act_window',
             'name': _('Revise BOQ'),
@@ -122,7 +119,7 @@ class ConstructionBOQLine(models.Model):
     expense_account_id = fields.Many2one('account.account', string='Expense Account', required=True, check_company=True)
     analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
 
-    # NEW: Replaced obsolete 'analytic_tag_id' with 'analytic_distribution' for Odoo 18 compatibility
+    # IMPL: Step 1.2 - Added analytic distribution (Odoo 18 equivalent of analytic_tag_id) 
     analytic_distribution = fields.Json(string='Analytic Distribution')
 
     consumed_quantity = fields.Float(string='Consumed Qty', compute='_compute_consumption', store=True)
