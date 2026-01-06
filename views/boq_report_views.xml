@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_construction_boq_report_pivot" model="ir.ui.view">
+        <field name="name">construction.boq.report.pivot</field>
+        <field name="model">construction.boq.report</field>
+        <field name="arch" type="xml">
+            <pivot string="BOQ Budget vs Actual" display_quantity="true">
+                <field name="project_id" type="row"/>
+                <field name="cost_type" type="col"/>
+                <field name="budget_amount" type="measure"/>
+                <field name="consumed_amount" type="measure"/>
+                <field name="variance_amount" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <record id="view_construction_boq_report_graph" model="ir.ui.view">
+        <field name="name">construction.boq.report.graph</field>
+        <field name="model">construction.boq.report</field>
+        <field name="arch" type="xml">
+            <graph string="Project Cost Analysis" type="bar">
+                <field name="project_id"/>
+                <field name="consumed_amount" type="measure"/>
+                <field name="budget_amount" type="measure"/>
+            </graph>
+        </field>
+    </record>
+
+    <record id="action_construction_boq_report" model="ir.actions.act_window">
+        <field name="name">Budget Analysis</field>
+        <field name="res_model">construction.boq.report</field>
+        <field name="view_mode">pivot,graph</field>
+        <field name="context">{'group_by': ['project_id']}</field>
+    </record>
+
+    <menuitem id="menu_construction_reporting" 
+        name="Reporting" 
+        parent="menu_construction_root" 
+        sequence="20"
+    />
+    <menuitem id="menu_construction_boq_analysis" 
+        name="Budget vs Actual" 
+        parent="menu_construction_reporting" 
+        action="action_construction_boq_report" 
+        sequence="1"
+    />
+</odoo>
