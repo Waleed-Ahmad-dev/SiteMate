@@ -1,3 +1,4 @@
+# __manifest__.py
 # -*- coding: utf-8 -*-
 {
     'name': 'Entrpryz Construction BOQ',
@@ -6,7 +7,8 @@
     'summary': 'Construction BOQ Management',
     'author': 'ELB Marketing',
     'website': 'https://entrpryz.com',
-    'depends': ['base', 'project', 'purchase', 'stock', 'account', 'mail'],
+    # Added 'stock_account' to support valuation overrides
+    'depends': ['base', 'project', 'purchase', 'stock', 'stock_account', 'account', 'mail'],
     'data': [
         'security/security.xml',
         'security/ir.model.access.csv',
