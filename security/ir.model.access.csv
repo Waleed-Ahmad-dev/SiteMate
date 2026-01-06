@@ -1,11 +1,12 @@
-id,                                     name,                                           model_id:id,                           group_id:id,             perm_read,  perm_write,    perm_create,   perm_unlink
-access_boq_site_engineer,               construction.boq.site.eng,                      model_construction_boq,                group_site_engineer,     1,          0,             0,             0
-access_boq_project_manager,             construction.boq.project.manager,               model_construction_boq,                group_project_manager,   1,          1,             1,             1
-access_boq_line_site_engineer,          construction.boq.line.site.eng,                 model_construction_boq_line,           group_site_engineer,     1,          0,             0,             0
-access_boq_line_project_manager,        construction.boq.line.project.manager,          model_construction_boq_line,           group_project_manager,   1,          1,             1,             1
-access_boq_section_site_engineer,       construction.boq.section.site.eng,              model_construction_boq_section,        group_site_engineer,     1,          0,             0,             0
-access_boq_section_project_manager,     construction.boq.section.project.manager,       model_construction_boq_section,        group_project_manager,   1,          1,             1,             1
-access_boq_consumption_site_engineer,   construction.boq.consumption.site.eng,          model_construction_boq_consumption,    group_site_engineer,     1,          0,             1,             0
-access_boq_consumption_project_manager, construction.boq.consumption.project.manager,   model_construction_boq_consumption,    group_project_manager,   1,          0,             1,             0
-access_boq_revision_site_engineer,      construction.boq.revision.site.eng,             model_construction_boq_revision,       group_site_engineer,     1,          0,             0,             0
-access_boq_revision_project_manager,    construction.boq.revision.project.manager,      model_construction_boq_revision,       group_project_manager,   1,          1,             1,             1
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_boq_site_engineer,construction.boq.site.eng,model_construction_boq,group_site_engineer,1,0,0,0
+access_boq_project_manager,construction.boq.project.manager,model_construction_boq,group_project_manager,1,1,1,1
+access_boq_line_site_engineer,construction.boq.line.site.eng,model_construction_boq_line,group_site_engineer,1,0,0,0
+access_boq_line_project_manager,construction.boq.line.project.manager,model_construction_boq_line,group_project_manager,1,1,1,1
+access_boq_section_site_engineer,construction.boq.section.site.eng,model_construction_boq_section,group_site_engineer,1,0,0,0
+access_boq_section_project_manager,construction.boq.section.project.manager,model_construction_boq_section,group_project_manager,1,1,1,1
+access_boq_consumption_site_engineer,construction.boq.consumption.site.eng,model_construction_boq_consumption,group_site_engineer,1,0,1,0
+access_boq_consumption_project_manager,construction.boq.consumption.project.manager,model_construction_boq_consumption,group_project_manager,1,0,1,0
+access_boq_revision_site_engineer,construction.boq.revision.site.eng,model_construction_boq_revision,group_site_engineer,1,0,0,0
+access_boq_revision_project_manager,construction.boq.revision.project.manager,model_construction_boq_revision,group_project_manager,1,1,1,1
+access_construction_boq_report,construction.boq.report,model_construction_boq_report,base.group_user,1,0,0,0
