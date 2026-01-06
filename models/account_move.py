@@ -5,11 +5,11 @@ from odoo.exceptions import ValidationError
 class AccountMove(models.Model):
     _inherit = 'account.move'
 
-    # Step 3.1: Implement Ledger Writing Logic [cite: 81]
+    # Step 3.1 & 3.2: Implement Ledger Writing & Concurrency Locking
     def action_post(self):
         """
         Override action_post to Create BOQ Consumption Ledger entries.
-        Includes Concurrency Locking.
+        Includes Concurrency Locking (Step 3.2).
         """
         # 1. Identify moves that need BOQ processing (Vendor Bills/Refunds)
         moves_to_process = self.filtered(lambda m: m.is_invoice(include_receipts=True))
@@ -22,10 +22,11 @@ class AccountMove(models.Model):
 
             for line in move.invoice_line_ids:
                 if line.boq_line_id:
-                    # Concurrency Handling: Select For Update [cite: 169, 171]
-                    # Lock the BOQ line to prevent race conditions during budget check
+                    # Step 3.2: Implement Concurrency Locking
+                    # TDD Section 10.4: Use SELECT FOR UPDATE to prevent race conditions.
+                    # We do NOT use NOWAIT, allowing the transaction to wait nicely if locked.
                     self.env.cr.execute(
-                        "SELECT id FROM construction_boq_line WHERE id=%s FOR UPDATE NOWAIT", 
+                        "SELECT id FROM construction_boq_line WHERE id=%s FOR UPDATE", 
                         (line.boq_line_id.id,)
                     )
                     
@@ -49,13 +50,13 @@ class AccountMove(models.Model):
                     else:
                         amount_to_consume = line.price_subtotal * sign
 
-                    # Validate Limits [cite: 134, 160]
+                    # Validate Limits
                     # We check positive consumption against remaining budget. 
                     # Refunds (negative) are generally allowed as they free up budget.
                     if sign > 0: 
                         line.boq_line_id.check_consumption(qty_to_consume, amount_to_consume)
 
-                    # Create Ledger Entry [cite: 81]
+                    # Create Ledger Entry
                     Consumption.create({
                         'boq_line_id': line.boq_line_id.id,
                         'source_model': 'account.move.line',
@@ -73,7 +74,7 @@ class AccountMove(models.Model):
 class AccountMoveLine(models.Model):
     _inherit = 'account.move.line'
 
-    # Sub-step: Add field boq_line_id [cite: 79]
+    # Sub-step: Add field boq_line_id
     boq_line_id = fields.Many2one(
         'construction.boq.line', 
         string='BOQ Item', 
