@@ -11,6 +11,7 @@
         'security/ir.model.access.csv',
         'views/boq_views.xml',
         'views/purchase_views.xml',
+        'views/stock_views.xml',
     ],
     'installable': True,
     'application': True,
