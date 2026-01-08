@@ -1,3 +1,4 @@
+# models/boq.py
 # -*- coding: utf-8 -*-
 from odoo import models, fields, api, _
 from odoo.exceptions import ValidationError, UserError
@@ -8,11 +9,18 @@ class ConstructionBOQ(models.Model):
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'id desc'
 
+    # -- Header Fields --
     name = fields.Char(string='BOQ Reference', required=True, copy=False, default='New', tracking=True)
+    active = fields.Boolean(string='Active', default=True, help="Set to False to hide old versions.")
+    
     project_id = fields.Many2one('project.project', string='Project', required=True, tracking=True)
     analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', required=True, tracking=True)
     company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
+    
+    # -- Versioning Fields --
     version = fields.Integer(string='Version', default=1, required=True, readonly=True, copy=False)
+    previous_boq_id = fields.Many2one('construction.boq', string='Previous Version', readonly=True, copy=False)
+    
     state = fields.Selection([
         ('draft', 'Draft'),
         ('submitted', 'Submitted'),
@@ -20,15 +28,15 @@ class ConstructionBOQ(models.Model):
         ('locked', 'Locked'),
         ('closed', 'Closed')
     ], string='Status', default='draft', required=True, tracking=True, copy=False)
-
+    
     approval_date = fields.Date(string='Approval Date', readonly=True, copy=False, tracking=True)
     approved_by = fields.Many2one('res.users', string='Approved By', readonly=True, copy=False, tracking=True)
     currency_id = fields.Many2one('res.currency', related='company_id.currency_id', string='Currency', readonly=True)
-
+    
     boq_line_ids = fields.One2many('construction.boq.line', 'boq_id', string='BOQ Lines')
     total_budget = fields.Monetary(string='Total Budget', compute='_compute_total_budget', currency_field='currency_id', store=True, tracking=True)
-
-    revision_ids = fields.One2many('construction.boq.revision', 'original_boq_id', string='Revisions')
+    
+    revision_ids = fields.One2many('construction.boq.revision', 'original_boq_id', string='Revision History')
 
     @api.depends('boq_line_ids.budget_amount', 'currency_id')
     def _compute_total_budget(self):
@@ -40,10 +48,11 @@ class ConstructionBOQ(models.Model):
         if self.project_id and self.project_id.account_id:
             self.analytic_account_id = self.project_id.account_id
 
+    # -- Workflow Actions --
     def action_submit(self):
         for rec in self:
             if not rec.boq_line_ids:
-                raise ValidationError(_('You cannot submit a BOQ with no lines.'))
+                 raise ValidationError(_('You cannot submit a BOQ with no lines.'))
             rec.write({'state': 'submitted'})
 
     def action_approve(self):
@@ -63,7 +72,7 @@ class ConstructionBOQ(models.Model):
     def action_revise(self):
         self.ensure_one()
         if self.state not in ['approved', 'locked']:
-            raise ValidationError(_("Only 'Approved' or 'Locked' BOQs can be revised."))
+             raise ValidationError(_("Only 'Approved' or 'Locked' BOQs can be revised."))
         return {
             'type': 'ir.actions.act_window',
             'name': _('Revise BOQ'),
@@ -72,7 +81,20 @@ class ConstructionBOQ(models.Model):
             'target': 'new',
             'context': {'default_boq_id': self.id}
         }
+        
+    def action_view_history(self):
+        """ Smart button action to see archived/previous versions """
+        self.ensure_one()
+        return {
+            'name': _('Version History'),
+            'type': 'ir.actions.act_window',
+            'res_model': 'construction.boq',
+            'view_mode': 'list,form',
+            'domain': [('project_id', '=', self.project_id.id), ('id', '!=', self.id)],
+            'context': {'active_test': False}, # This is crucial to see Archived records
+        }
 
+    # -- Constraints --
     @api.constrains('state')
     def _check_boq_before_approval(self):
         for boq in self:
@@ -81,11 +103,19 @@ class ConstructionBOQ(models.Model):
 
     def _check_one_active_boq(self):
         for rec in self:
-            domain = [('project_id', '=', rec.project_id.id), ('state', 'in', ['approved', 'locked']), ('id', '!=', rec.id)]
+            # We filter by active=True to ensure we don't count archived versions
+            domain = [
+                ('project_id', '=', rec.project_id.id), 
+                ('state', 'in', ['approved', 'locked']), 
+                ('id', '!=', rec.id),
+                ('active', '=', True)
+            ]
             if self.search_count(domain) > 0:
-                raise ValidationError(_('There is already an active (Approved or Locked) BOQ for this project.'))
+                raise ValidationError(_('There is already an active (Approved or Locked) BOQ for this project. Please revise it instead.'))
 
-    _sql_constraints = [('uniq_project_version', 'unique(project_id, version)', 'A BOQ with this version already exists for this project.')]
+    _sql_constraints = [
+        ('uniq_project_version', 'unique(project_id, version)', 'A BOQ with this version already exists for this project.')
+    ]
 
 class ConstructionBOQSection(models.Model):
     _name = 'construction.boq.section'
@@ -104,8 +134,7 @@ class ConstructionBOQLine(models.Model):
     boq_id = fields.Many2one('construction.boq', string='BOQ Reference', required=True, ondelete='cascade', index=True)
     section_id = fields.Many2one('construction.boq.section', string='Section', domain="[('boq_id', '=', boq_id)]")
     product_id = fields.Many2one('product.product', string='Product', domain="[('company_id', 'in', (company_id, False))]")
-
-    # Task & Activity Code Integration
+    
     task_id = fields.Many2one('project.task', string='Task', domain="[('project_id', '=', parent.project_id)]")
     activity_code = fields.Char(string='Activity Code')
 
@@ -120,11 +149,11 @@ class ConstructionBOQLine(models.Model):
     uom_id = fields.Many2one('uom.uom', string='Unit of Measure', required=True)
     estimated_rate = fields.Monetary(string='Rate', currency_field='currency_id', default=0.0, required=True)
     budget_amount = fields.Monetary(string='Budget Amount', compute='_compute_budget_amount', currency_field='currency_id', store=True)
-
+    
     expense_account_id = fields.Many2one('account.account', string='Expense Account', required=True, check_company=True)
     analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
 
-    # FIXED: Added analytic_precision which is required by the widget="analytic_distribution"
+    # FIX: Added analytic_precision to solve your RPC Error
     analytic_distribution = fields.Json(string='Analytic Distribution')
     analytic_precision = fields.Integer(store=False, default=2)
 
@@ -148,7 +177,6 @@ class ConstructionBOQLine(models.Model):
             rec.remaining_quantity = rec.quantity - rec.consumed_quantity
             rec.remaining_amount = rec.budget_amount - rec.consumed_amount
 
-    # Step 7.2 & 7.3: Auto-Fetch Expense Account & Validate
     @api.onchange('product_id')
     def _onchange_product_id(self):
         if self.product_id:
@@ -156,17 +184,13 @@ class ConstructionBOQLine(models.Model):
             self.description = self.product_id.description_sale or self.product_id.name
             self.uom_id = self.product_id.uom_id
             self.estimated_rate = self.product_id.standard_price
-
-            # Auto-fetch expense account
+            
             account = self.product_id.property_account_expense_id or self.product_id.categ_id.property_account_expense_categ_id
-
-            # Validation: Raise error if account is missing
             if not account:
                 raise UserError(_(
                     "No Expense Account defined for product '%s' or its category.\n"
                     "Please configure the expense account in the Product/Category settings before using it in the BOQ."
                 ) % self.product_id.name)
-
             self.expense_account_id = account.id
 
     @api.onchange('task_id')
@@ -178,7 +202,7 @@ class ConstructionBOQLine(models.Model):
     def _prevent_edit_on_locked_boq(self):
         for line in self:
             if line.boq_id.state in ('approved', 'locked', 'closed'):
-                raise ValidationError(_('Approved/Locked BOQs cannot be modified.'))
+                raise ValidationError(_('Approved/Locked BOQs cannot be modified. Please use the Revise button to create a new version.'))
 
     @api.constrains('analytic_account_id', 'boq_id')
     def _check_project_alignment(self):
@@ -190,13 +214,14 @@ class ConstructionBOQLine(models.Model):
     def check_consumption(self, qty, amount):
         self.ensure_one()
         if not self.allow_over_consumption:
+            # We add a small float epsilon to avoid rounding errors
             if qty > self.remaining_quantity + 0.0001:
-                raise ValidationError(_(
+                 raise ValidationError(_(
                     'BOQ Quantity Exceeded for %s.\nAttempting to consume: %s\nRemaining: %s'
                 ) % (self.name, qty, self.remaining_quantity))
-
+            
             if amount > self.remaining_amount + 0.01:
-                raise ValidationError(_(
+                 raise ValidationError(_(
                     'BOQ Budget Exceeded for %s.\nAttempting to consume: %s\nRemaining: %s'
                 ) % (self.name, amount, self.remaining_amount))
 
@@ -221,13 +246,6 @@ class ConstructionBOQConsumption(models.Model):
     user_id = fields.Many2one('res.users', string='User', default=lambda self: self.env.user)
 
     def init(self):
-        """
-        [cite_start]Subtask 3.1: Implement Ledger Immutability (SQL) [cite: 119-121]
-        Prevent any module (even via RPC) from updating or deleting consumption records.
-        Ledger is append-only.
-        """
-        # Ensure the table exists before modifying permissions
-        # (Odoo creates it automatically, but init hooks run after model loading)
         self.env.cr.execute("""
             REVOKE UPDATE, DELETE ON construction_boq_consumption FROM PUBLIC;
         """)
