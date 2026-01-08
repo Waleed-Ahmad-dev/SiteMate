@@ -21,6 +21,7 @@ class ConstructionBOQ(models.Model):
     version = fields.Integer(string='Version', default=1, required=True, readonly=True, copy=False)
     previous_boq_id = fields.Many2one('construction.boq', string='Previous Version', readonly=True, copy=False)
     
+    # State: Note that we removed readonly logic in the View, so we rely on the Python logic to handle "locking"
     state = fields.Selection([
         ('draft', 'Draft'),
         ('submitted', 'Submitted'),
@@ -69,19 +70,6 @@ class ConstructionBOQ(models.Model):
         for rec in self:
             rec.write({'state': 'closed'})
 
-    def action_revise(self):
-        self.ensure_one()
-        if self.state not in ['approved', 'locked']:
-             raise ValidationError(_("Only 'Approved' or 'Locked' BOQs can be revised."))
-        return {
-            'type': 'ir.actions.act_window',
-            'name': _('Revise BOQ'),
-            'res_model': 'construction.boq.revision.wizard',
-            'view_mode': 'form',
-            'target': 'new',
-            'context': {'default_boq_id': self.id}
-        }
-        
     def action_view_history(self):
         """ Smart button action to see archived/previous versions """
         self.ensure_one()
@@ -90,11 +78,93 @@ class ConstructionBOQ(models.Model):
             'type': 'ir.actions.act_window',
             'res_model': 'construction.boq',
             'view_mode': 'list,form',
+            # Show all previous versions linked to this project, excluding self
             'domain': [('project_id', '=', self.project_id.id), ('id', '!=', self.id)],
-            'context': {'active_test': False}, # This is crucial to see Archived records
+            'context': {'active_test': False}, 
         }
 
-    # -- Constraints --
+    # -------------------------------------------------------------------------
+    # AUTOMATIC VERSIONING LOGIC (COPY-ON-WRITE)
+    # -------------------------------------------------------------------------
+
+    def create_revision_snapshot(self):
+        """
+        1. Copies the CURRENT data (before edit) to a new 'Archived' record.
+        2. Updates the CURRENT record to be the new Version (N+1).
+        """
+        for boq in self:
+            if boq.state not in ['approved', 'locked']:
+                continue
+            
+            # A. Create the Snapshot (The "Old" Version)
+            # We copy the current BOQ. The copy mechanism will duplicate the lines automatically.
+            history_name = f"{boq.name} (v{boq.version})"
+            
+            # Context 'revision_copy' prevents infinite recursion in create/write overrides
+            history_boq = boq.with_context(revision_copy=True, mail_create_nosubscribe=True).copy({
+                'name': history_name,
+                'active': False,         # Archive it
+                'state': 'locked',       # Lock it
+                'version': boq.version,  # Keep the old version number
+                'previous_boq_id': boq.previous_boq_id.id, # Link to the one before that
+            })
+
+            # B. Log the snapshot in the separate Revision History Table (Audit Trail)
+            self.env['construction.boq.revision'].create({
+                'original_boq_id': history_boq.id, # The snapshot is the "Original" now
+                'new_boq_id': boq.id,              # The current one is the "New" one
+                'revision_reason': "Automatic revision on modification.",
+                'approved_by': boq.approved_by.id,
+                'approval_date': boq.approval_date,
+            })
+
+            # C. Update the CURRENT Record to be the New Version
+            # We do this using SQL to avoid triggering the 'write' method again recursively
+            new_version = boq.version + 1
+            
+            # We normally reset state to draft so it can be re-approved. 
+            # If you want it to stay approved, remove 'state': 'draft'.
+            # Given the strict control, modifying a budget usually requires re-approval.
+            boq_vals = {
+                'version': new_version,
+                'previous_boq_id': history_boq.id,
+                'state': 'draft', # Reset to draft to force re-approval of changes
+                'approval_date': False,
+                'approved_by': False,
+            }
+            
+            # Use super write to update metadata without triggering our override logic again
+            super(ConstructionBOQ, boq).write(boq_vals)
+            
+            # Post message
+            boq.message_post(body=f"Auto-Revision: Content modified. Archived v{boq.version-1} and created v{boq.version}.")
+
+    def write(self, vals):
+        """
+        Override Write to detect changes in Approved/Locked BOQs.
+        """
+        # If we are just copying for revision, skip logic
+        if self.env.context.get('revision_copy'):
+            return super(ConstructionBOQ, self).write(vals)
+
+        # Fields that should NOT trigger a revision (technical fields or status updates)
+        ignore_fields = ['message_follower_ids', 'state', 'approval_date', 'approved_by', 'active', 'total_budget']
+        
+        # Check if incoming vals contain actual business data changes
+        has_business_changes = any(f not in ignore_fields for f in vals)
+
+        if has_business_changes:
+            for boq in self:
+                if boq.state in ['approved', 'locked']:
+                    # TRIGGER THE SNAPSHOT BEFORE WRITING THE NEW VALUES
+                    boq.create_revision_snapshot()
+
+        return super(ConstructionBOQ, self).write(vals)
+
+    # -------------------------------------------------------------------------
+    # CONSTRAINTS
+    # -------------------------------------------------------------------------
+
     @api.constrains('state')
     def _check_boq_before_approval(self):
         for boq in self:
@@ -103,7 +173,6 @@ class ConstructionBOQ(models.Model):
 
     def _check_one_active_boq(self):
         for rec in self:
-            # We filter by active=True to ensure we don't count archived versions
             domain = [
                 ('project_id', '=', rec.project_id.id), 
                 ('state', 'in', ['approved', 'locked']), 
@@ -111,11 +180,12 @@ class ConstructionBOQ(models.Model):
                 ('active', '=', True)
             ]
             if self.search_count(domain) > 0:
-                raise ValidationError(_('There is already an active (Approved or Locked) BOQ for this project. Please revise it instead.'))
+                raise ValidationError(_('There is already an active (Approved or Locked) BOQ for this project.'))
 
     _sql_constraints = [
         ('uniq_project_version', 'unique(project_id, version)', 'A BOQ with this version already exists for this project.')
     ]
+
 
 class ConstructionBOQSection(models.Model):
     _name = 'construction.boq.section'
@@ -125,6 +195,7 @@ class ConstructionBOQSection(models.Model):
     name = fields.Char(string='Section Name', required=True)
     boq_id = fields.Many2one('construction.boq', string='BOQ Reference', required=True, ondelete='cascade')
     sequence = fields.Integer(string='Sequence', default=10)
+
 
 class ConstructionBOQLine(models.Model):
     _name = 'construction.boq.line'
@@ -153,7 +224,6 @@ class ConstructionBOQLine(models.Model):
     expense_account_id = fields.Many2one('account.account', string='Expense Account', required=True, check_company=True)
     analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
 
-    # FIX: Added analytic_precision to solve your RPC Error
     analytic_distribution = fields.Json(string='Analytic Distribution')
     analytic_precision = fields.Integer(store=False, default=2)
 
@@ -184,25 +254,15 @@ class ConstructionBOQLine(models.Model):
             self.description = self.product_id.description_sale or self.product_id.name
             self.uom_id = self.product_id.uom_id
             self.estimated_rate = self.product_id.standard_price
-            
             account = self.product_id.property_account_expense_id or self.product_id.categ_id.property_account_expense_categ_id
             if not account:
-                raise UserError(_(
-                    "No Expense Account defined for product '%s' or its category.\n"
-                    "Please configure the expense account in the Product/Category settings before using it in the BOQ."
-                ) % self.product_id.name)
+                raise UserError(_("No Expense Account defined for product '%s'.") % self.product_id.name)
             self.expense_account_id = account.id
 
     @api.onchange('task_id')
     def _onchange_task_id(self):
         if self.task_id and self.task_id.activity_code:
             self.activity_code = self.task_id.activity_code
-
-    @api.constrains('boq_id', 'product_id', 'quantity', 'estimated_rate', 'name')
-    def _prevent_edit_on_locked_boq(self):
-        for line in self:
-            if line.boq_id.state in ('approved', 'locked', 'closed'):
-                raise ValidationError(_('Approved/Locked BOQs cannot be modified. Please use the Revise button to create a new version.'))
 
     @api.constrains('analytic_account_id', 'boq_id')
     def _check_project_alignment(self):
@@ -214,16 +274,46 @@ class ConstructionBOQLine(models.Model):
     def check_consumption(self, qty, amount):
         self.ensure_one()
         if not self.allow_over_consumption:
-            # We add a small float epsilon to avoid rounding errors
             if qty > self.remaining_quantity + 0.0001:
-                 raise ValidationError(_(
-                    'BOQ Quantity Exceeded for %s.\nAttempting to consume: %s\nRemaining: %s'
-                ) % (self.name, qty, self.remaining_quantity))
-            
+                 raise ValidationError(_('BOQ Quantity Exceeded for %s.') % self.name)
             if amount > self.remaining_amount + 0.01:
-                 raise ValidationError(_(
-                    'BOQ Budget Exceeded for %s.\nAttempting to consume: %s\nRemaining: %s'
-                ) % (self.name, amount, self.remaining_amount))
+                 raise ValidationError(_('BOQ Budget Exceeded for %s.') % self.name)
+
+    # -------------------------------------------------------------------------
+    # PROPAGATE VERSIONING FROM LINE CHANGES
+    # -------------------------------------------------------------------------
+    
+    @api.model_create_multi
+    def create(self, vals_list):
+        # Identify BOQ IDs being modified
+        boq_ids = set()
+        for vals in vals_list:
+            if vals.get('boq_id'):
+                boq_ids.add(vals['boq_id'])
+        
+        if boq_ids:
+            boqs = self.env['construction.boq'].browse(list(boq_ids))
+            # Trigger snapshot if parent is approved/locked
+            if not self.env.context.get('revision_copy'):
+                boqs.filtered(lambda b: b.state in ['approved', 'locked']).create_revision_snapshot()
+
+        return super(ConstructionBOQLine, self).create(vals_list)
+
+    def write(self, vals):
+        if not self.env.context.get('revision_copy'):
+            # Group lines by boq_id
+            boqs = self.mapped('boq_id')
+            # Trigger snapshot on parents
+            boqs.filtered(lambda b: b.state in ['approved', 'locked']).create_revision_snapshot()
+            
+        return super(ConstructionBOQLine, self).write(vals)
+
+    def unlink(self):
+        if not self.env.context.get('revision_copy'):
+            boqs = self.mapped('boq_id')
+            boqs.filtered(lambda b: b.state in ['approved', 'locked']).create_revision_snapshot()
+            
+        return super(ConstructionBOQLine, self).unlink()
 
     _sql_constraints = [
         ('chk_qty_positive', 'CHECK(quantity > 0)', 'Quantity must be positive.'),
