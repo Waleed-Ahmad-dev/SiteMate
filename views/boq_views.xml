@@ -57,10 +57,10 @@
                                     <field name="display_type" column_invisible="1"/>
                                     <field name="company_id" column_invisible="1"/>
                                     <field name="section_id" optional="hide"/>
-                                    
+                                   
                                     <field name="task_id" optional="show" domain="[('project_id', '=', parent.project_id)]" options="{'no_create': True}"/>
                                     <field name="activity_code" optional="show"/>
-                                    
+                                   
                                     <field name="product_id"/>
                                     <field name="name" widget="section_and_note_text"/>
                                     <field name="cost_type" optional="show"/>
@@ -68,16 +68,16 @@
                                     <field name="uom_id"/>
                                     <field name="estimated_rate"/>
                                     <field name="budget_amount" widget="monetary" sum="Total"/>
-                                    
+                                   
                                     <field name="expense_account_id" optional="show" domain="[('deprecated', '=', False)]" readonly="1" force_save="1"/>
-                                    
+                                   
                                     <field name="analytic_distribution" widget="analytic_distribution" optional="show"/>
 
                                     <field name="consumed_amount" widget="monetary" optional="hide"/>
                                     <field name="remaining_amount" widget="monetary" optional="show" decoration-danger="remaining_amount &lt; 0"/>
-                                    
+                                   
                                     <field name="allow_over_consumption" optional="hide" groups="entrpryz_construction_boq.group_finance_head"/>
-                                    
+                                   
                                     <field name="currency_id" column_invisible="1"/>
                                 </list>
                             </field>
@@ -130,7 +130,7 @@
     <record id="action_construction_boq" model="ir.actions.act_window">
         <field name="name">Construction BOQs</field>
         <field name="res_model">construction.boq</field>
-        <field name="view_mode">tree,form</field>
+        <field name="view_mode">list,form</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">Create a new Bill of Quantities</p>
         </field>
