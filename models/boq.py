@@ -20,14 +20,14 @@ class ConstructionBOQ(models.Model):
         ('locked', 'Locked'),
         ('closed', 'Closed')
     ], string='Status', default='draft', required=True, tracking=True, copy=False)
-   
+
     approval_date = fields.Date(string='Approval Date', readonly=True, copy=False, tracking=True)
     approved_by = fields.Many2one('res.users', string='Approved By', readonly=True, copy=False, tracking=True)
     currency_id = fields.Many2one('res.currency', related='company_id.currency_id', string='Currency', readonly=True)
-   
+
     boq_line_ids = fields.One2many('construction.boq.line', 'boq_id', string='BOQ Lines')
     total_budget = fields.Monetary(string='Total Budget', compute='_compute_total_budget', currency_field='currency_id', store=True, tracking=True)
-   
+
     revision_ids = fields.One2many('construction.boq.revision', 'original_boq_id', string='Revisions')
 
     @api.depends('boq_line_ids.budget_amount', 'currency_id')
@@ -43,7 +43,7 @@ class ConstructionBOQ(models.Model):
     def action_submit(self):
         for rec in self:
             if not rec.boq_line_ids:
-                 raise ValidationError(_('You cannot submit a BOQ with no lines.'))
+                raise ValidationError(_('You cannot submit a BOQ with no lines.'))
             rec.write({'state': 'submitted'})
 
     def action_approve(self):
@@ -63,7 +63,7 @@ class ConstructionBOQ(models.Model):
     def action_revise(self):
         self.ensure_one()
         if self.state not in ['approved', 'locked']:
-             raise ValidationError(_("Only 'Approved' or 'Locked' BOQs can be revised."))
+            raise ValidationError(_("Only 'Approved' or 'Locked' BOQs can be revised."))
         return {
             'type': 'ir.actions.act_window',
             'name': _('Revise BOQ'),
@@ -104,7 +104,7 @@ class ConstructionBOQLine(models.Model):
     boq_id = fields.Many2one('construction.boq', string='BOQ Reference', required=True, ondelete='cascade', index=True)
     section_id = fields.Many2one('construction.boq.section', string='Section', domain="[('boq_id', '=', boq_id)]")
     product_id = fields.Many2one('product.product', string='Product', domain="[('company_id', 'in', (company_id, False))]")
-   
+
     # Task & Activity Code Integration
     task_id = fields.Many2one('project.task', string='Task', domain="[('project_id', '=', parent.project_id)]")
     activity_code = fields.Char(string='Activity Code')
@@ -120,7 +120,7 @@ class ConstructionBOQLine(models.Model):
     uom_id = fields.Many2one('uom.uom', string='Unit of Measure', required=True)
     estimated_rate = fields.Monetary(string='Rate', currency_field='currency_id', default=0.0, required=True)
     budget_amount = fields.Monetary(string='Budget Amount', compute='_compute_budget_amount', currency_field='currency_id', store=True)
-   
+
     expense_account_id = fields.Many2one('account.account', string='Expense Account', required=True, check_company=True)
     analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
 
@@ -156,17 +156,17 @@ class ConstructionBOQLine(models.Model):
             self.description = self.product_id.description_sale or self.product_id.name
             self.uom_id = self.product_id.uom_id
             self.estimated_rate = self.product_id.standard_price
-           
+
             # Auto-fetch expense account
             account = self.product_id.property_account_expense_id or self.product_id.categ_id.property_account_expense_categ_id
-           
+
             # Validation: Raise error if account is missing
             if not account:
                 raise UserError(_(
                     "No Expense Account defined for product '%s' or its category.\n"
                     "Please configure the expense account in the Product/Category settings before using it in the BOQ."
                 ) % self.product_id.name)
-           
+
             self.expense_account_id = account.id
 
     @api.onchange('task_id')
@@ -191,12 +191,12 @@ class ConstructionBOQLine(models.Model):
         self.ensure_one()
         if not self.allow_over_consumption:
             if qty > self.remaining_quantity + 0.0001:
-                 raise ValidationError(_(
+                raise ValidationError(_(
                     'BOQ Quantity Exceeded for %s.\nAttempting to consume: %s\nRemaining: %s'
                 ) % (self.name, qty, self.remaining_quantity))
-           
+
             if amount > self.remaining_amount + 0.01:
-                 raise ValidationError(_(
+                raise ValidationError(_(
                     'BOQ Budget Exceeded for %s.\nAttempting to consume: %s\nRemaining: %s'
                 ) % (self.name, amount, self.remaining_amount))
 
