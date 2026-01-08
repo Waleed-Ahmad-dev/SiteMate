@@ -10,4 +10,3 @@ access_boq_consumption_project_manager,construction.boq.consumption.project.mana
 access_boq_revision_site_engineer,construction.boq.revision.site.eng,model_construction_boq_revision,group_site_engineer,1,0,0,0
 access_boq_revision_project_manager,construction.boq.revision.project.manager,model_construction_boq_revision,group_project_manager,1,1,1,1
 access_construction_boq_report,construction.boq.report,model_construction_boq_report,base.group_user,1,0,0,0
-access_boq_revision_wizard,construction.boq.revision.wizard,model_construction_boq_revision_wizard,base.group_user,1,1,1,1
