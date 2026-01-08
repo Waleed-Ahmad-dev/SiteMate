@@ -1,141 +1,152 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <record id="view_construction_boq_tree" model="ir.ui.view">
-        <field name="name">construction.boq.list</field>
-        <field name="model">construction.boq</field>
-        <field name="arch" type="xml">
-            <list string="Construction BOQs" decoration-info="state == 'draft'" decoration-muted="state == 'closed'">
-                <field name="name"/>
-                <field name="project_id"/>
-                <field name="analytic_account_id"/>
-                <field name="total_budget" sum="Total Budget" widget="monetary"/>
-                <field name="currency_id" column_invisible="1"/>
-                <field name="state" widget="badge" decoration-success="state == 'approved'" decoration-warning="state == 'submitted'"/>
-            </list>
-        </field>
-    </record>
+   <record id="view_construction_boq_tree" model="ir.ui.view">
+       <field name="name">construction.boq.list</field>
+       <field name="model">construction.boq</field>
+       <field name="arch" type="xml">
+           <list string="Construction BOQs" decoration-info="state == 'draft'" decoration-muted="state == 'closed'">
+               <field name="name"/>
+               <field name="version"/>
+               <field name="project_id"/>
+               <field name="analytic_account_id"/>
+               <field name="total_budget" sum="Total Budget" widget="monetary"/>
+               <field name="currency_id" column_invisible="1"/>
+               <field name="state" widget="badge" decoration-success="state == 'approved'" decoration-warning="state == 'submitted'"/>
+           </list>
+       </field>
+   </record>
 
-    <record id="view_construction_boq_form" model="ir.ui.view">
-        <field name="name">construction.boq.form</field>
-        <field name="model">construction.boq</field>
-        <field name="arch" type="xml">
-            <form string="Construction BOQ">
-                <header>
-                    <button name="action_submit" string="Submit" type="object" class="oe_highlight" invisible="state != 'draft'"/>
-                    <button name="action_approve" string="Approve" type="object" class="oe_highlight" invisible="state != 'submitted'"/>
-                    <button name="action_lock" string="Lock" type="object" class="oe_highlight" invisible="state != 'approved'"/>
-                    <button name="action_revise" string="Revise" type="object" invisible="state not in ('approved', 'locked')"/>
-                    <button name="action_close" string="Close" type="object" invisible="state not in ('approved', 'locked')"/>
-                    <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved,locked,closed"/>
-                </header>
-                <sheet>
-                    <div class="oe_title">
-                        <h1><field name="name" placeholder="BOQ Reference"/></h1>
-                    </div>
-                    <group>
-                        <group>
-                            <field name="project_id" readonly="state != 'draft'"/>
-                            <field name="analytic_account_id" readonly="state != 'draft'"/>
-                            <field name="company_id" groups="base.group_multi_company" readonly="state != 'draft'"/>
-                        </group>
-                        <group>
-                            <field name="version"/>
-                            <field name="approval_date"/>
-                            <field name="approved_by"/>
-                            <field name="currency_id" invisible="1"/>
-                        </group>
-                    </group>
-                    <notebook>
-                        <page string="BOQ Lines" name="lines">
-                            <field name="boq_line_ids" widget="section_and_note_one2many" readonly="state in ('approved', 'locked', 'closed')">
-                                <list editable="bottom">
-                                    <control>
-                                        <create name="add_line_control" string="Add a line"/>
-                                        <create name="add_section_control" string="Add a section" context="{'default_display_type': 'line_section'}"/>
-                                    </control>
-                                    <field name="sequence" widget="handle"/>
-                                    <field name="display_type" column_invisible="1"/>
-                                    <field name="company_id" column_invisible="1"/>
-                                    <field name="section_id" optional="hide"/>
-                                   
-                                    <field name="task_id" optional="show" domain="[('project_id', '=', parent.project_id)]" options="{'no_create': True}"/>
-                                    <field name="activity_code" optional="show"/>
-                                   
-                                    <field name="product_id"/>
-                                    <field name="name" widget="section_and_note_text"/>
-                                    <field name="cost_type" optional="show"/>
-                                    <field name="quantity"/>
-                                    <field name="uom_id"/>
-                                    <field name="estimated_rate"/>
-                                    <field name="budget_amount" widget="monetary" sum="Total"/>
-                                   
-                                    <field name="expense_account_id" optional="show" domain="[('deprecated', '=', False)]" readonly="1" force_save="1"/>
-                                   
-                                    <field name="analytic_distribution" widget="analytic_distribution" optional="show"/>
+   <record id="view_construction_boq_form" model="ir.ui.view">
+       <field name="name">construction.boq.form</field>
+       <field name="model">construction.boq</field>
+       <field name="arch" type="xml">
+           <form string="Construction BOQ">
+               <header>
+                   <button name="action_submit" string="Submit" type="object" class="oe_highlight" invisible="state != 'draft'"/>
+                   <button name="action_approve" string="Approve" type="object" class="oe_highlight" invisible="state != 'submitted'"/>
+                   <button name="action_lock" string="Lock" type="object" class="oe_highlight" invisible="state != 'approved'"/>
+                   <button name="action_revise" string="Revise" type="object" invisible="state not in ('approved', 'locked')"/>
+                   <button name="action_close" string="Close" type="object" invisible="state not in ('approved', 'locked')"/>
+                   <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved,locked,closed"/>
+               </header>
+               <sheet>
+                   <div class="oe_button_box" name="button_box">
+                       <button name="action_view_history" type="object" class="oe_stat_button" icon="fa-history" string="History" invisible="version == 1">
+                       </button>
+                   </div>
+                   <widget name="web_ribbon" title="Archived" bg_color="bg-danger" invisible="active"/>
+                   <div class="oe_title">
+                       <h1><field name="name" placeholder="BOQ Reference"/></h1>
+                   </div>
+                   <group>
+                       <group>
+                           <field name="active" invisible="1"/>
+                           <field name="project_id" readonly="state != 'draft'"/>
+                           <field name="analytic_account_id" readonly="state != 'draft'"/>
+                           <field name="company_id" groups="base.group_multi_company" readonly="state != 'draft'"/>
+                       </group>
+                       <group>
+                           <field name="version"/>
+                           <field name="previous_boq_id" invisible="not previous_boq_id"/>
+                           <field name="approval_date"/>
+                           <field name="approved_by"/>
+                           <field name="currency_id" invisible="1"/>
+                       </group>
+                   </group>
+                   <notebook>
+                       <page string="BOQ Lines" name="lines">
+                           <field name="boq_line_ids" widget="section_and_note_one2many" readonly="state in ('approved', 'locked', 'closed')">
+                               <list editable="bottom">
+                                   <control>
+                                       <create name="add_line_control" string="Add a line"/>
+                                       <create name="add_section_control" string="Add a section" context="{'default_display_type': 'line_section'}"/>
+                                   </control>
+                                   <field name="sequence" widget="handle"/>
+                                   <field name="display_type" column_invisible="1"/>
+                                   <field name="company_id" column_invisible="1"/>
+                                   <field name="section_id" optional="hide"/>
+                                  
+                                   <field name="task_id" optional="show" domain="[('project_id', '=', parent.project_id)]" options="{'no_create': True}"/>
+                                   <field name="activity_code" optional="show"/>
+                                  
+                                   <field name="product_id"/>
+                                   <field name="name" widget="section_and_note_text"/>
+                                   <field name="cost_type" optional="show"/>
+                                   <field name="quantity"/>
+                                   <field name="uom_id"/>
+                                   <field name="estimated_rate"/>
+                                   <field name="budget_amount" widget="monetary" sum="Total"/>
+                                  
+                                   <field name="expense_account_id" optional="show" domain="[('deprecated', '=', False)]" readonly="1" force_save="1"/>
+                                  
+                                   <field name="analytic_distribution" widget="analytic_distribution" optional="show"/>
+                                   <field name="analytic_precision" column_invisible="1"/>
 
-                                    <field name="consumed_amount" widget="monetary" optional="hide"/>
-                                    <field name="remaining_amount" widget="monetary" optional="show" decoration-danger="remaining_amount &lt; 0"/>
-                                   
-                                    <field name="allow_over_consumption" optional="hide" groups="entrpryz_construction_boq.group_finance_head"/>
-                                   
-                                    <field name="currency_id" column_invisible="1"/>
-                                </list>
-                            </field>
-                            <group name="note_group" col="6" class="mt-2 mt-md-0">
-                                <group class="oe_subtotal_footer oe_right" colspan="2" name="sale_total">
-                                    <field name="total_budget" widget="monetary"/>
-                                </group>
-                                <div class="clearfix"/>
-                            </group>
-                        </page>
-                        <page string="Revisions" name="revisions">
-                            <field name="revision_ids" readonly="1">
-                                <list>
-                                    <field name="create_date" string="Date"/>
-                                    <field name="revision_reason"/>
-                                    <field name="approved_by"/>
-                                </list>
-                            </field>
-                        </page>
-                        <page string="Audit Trail" name="audit">
-                            <group>
-                                <field name="create_uid" string="Created By"/>
-                                <field name="create_date" string="Created On"/>
-                            </group>
-                        </page>
-                    </notebook>
-                </sheet>
-                <chatter/>
-            </form>
-        </field>
-    </record>
+                                   <field name="consumed_amount" widget="monetary" optional="hide"/>
+                                   <field name="remaining_amount" widget="monetary" optional="show" decoration-danger="remaining_amount &lt; 0"/>
+                                  
+                                   <field name="allow_over_consumption" optional="hide" groups="entrpryz_construction_boq.group_finance_head"/>
+                                  
+                                   <field name="currency_id" column_invisible="1"/>
+                               </list>
+                           </field>
+                           <group name="note_group" col="6" class="mt-2 mt-md-0">
+                               <group class="oe_subtotal_footer oe_right" colspan="2" name="sale_total">
+                                   <field name="total_budget" widget="monetary"/>
+                               </group>
+                               <div class="clearfix"/>
+                           </group>
+                       </page>
+                       <page string="Revisions" name="revisions">
+                           <field name="revision_ids" readonly="1">
+                               <list>
+                                   <field name="create_date" string="Date"/>
+                                   <field name="revision_reason"/>
+                                   <field name="approved_by"/>
+                               </list>
+                           </field>
+                       </page>
+                       <page string="Audit Trail" name="audit">
+                           <group>
+                               <field name="create_uid" string="Created By"/>
+                               <field name="create_date" string="Created On"/>
+                           </group>
+                       </page>
+                   </notebook>
+               </sheet>
+               <chatter/>
+           </form>
+       </field>
+   </record>
 
-    <record id="view_construction_boq_search" model="ir.ui.view">
-        <field name="name">construction.boq.search</field>
-        <field name="model">construction.boq</field>
-        <field name="arch" type="xml">
-            <search>
-                <field name="name"/>
-                <field name="project_id"/>
-                <filter string="Draft" name="draft" domain="[('state', '=', 'draft')]"/>
-                <filter string="Approved" name="approved" domain="[('state', '=', 'approved')]"/>
-                <group expand="0" string="Group By">
-                    <filter string="Project" name="group_project" context="{'group_by': 'project_id'}"/>
-                    <filter string="Status" name="group_state" context="{'group_by': 'state'}"/>
-                </group>
-            </search>
-        </field>
-    </record>
+   <record id="view_construction_boq_search" model="ir.ui.view">
+       <field name="name">construction.boq.search</field>
+       <field name="model">construction.boq</field>
+       <field name="arch" type="xml">
+           <search>
+               <field name="name"/>
+               <field name="project_id"/>
+               <filter string="Draft" name="draft" domain="[('state', '=', 'draft')]"/>
+               <filter string="Approved" name="approved" domain="[('state', '=', 'approved')]"/>
+               <separator/>
+               <filter string="Archived" name="inactive" domain="[('active', '=', False)]"/>
+               <group expand="0" string="Group By">
+                   <filter string="Project" name="group_project" context="{'group_by': 'project_id'}"/>
+                   <filter string="Status" name="group_state" context="{'group_by': 'state'}"/>
+               </group>
+           </search>
+       </field>
+   </record>
 
-    <record id="action_construction_boq" model="ir.actions.act_window">
-        <field name="name">Construction BOQs</field>
-        <field name="res_model">construction.boq</field>
-        <field name="view_mode">list,form</field>
-        <field name="help" type="html">
-            <p class="o_view_nocontent_smiling_face">Create a new Bill of Quantities</p>
-        </field>
-    </record>
+   <record id="action_construction_boq" model="ir.actions.act_window">
+       <field name="name">Construction BOQs</field>
+       <field name="res_model">construction.boq</field>
+       <field name="view_mode">list,form</field>
+       <field name="help" type="html">
+           <p class="o_view_nocontent_smiling_face">Create a new Bill of Quantities</p>
+       </field>
+   </record>
 
-    <menuitem id="menu_construction_root" name="Construction" web_icon="project,static/description/icon.png" sequence="10"/>
-    <menuitem id="menu_construction_boq" name="BOQs" parent="menu_construction_root" action="action_construction_boq" sequence="1"/>
+   <menuitem id="menu_construction_root" name="Construction" web_icon="project,static/description/icon.png" sequence="10"/>
+   <menuitem id="menu_construction_boq" name="BOQs" parent="menu_construction_root" action="action_construction_boq" sequence="1"/>
 </odoo>
