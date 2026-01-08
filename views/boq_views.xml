@@ -130,7 +130,7 @@
     <record id="action_construction_boq" model="ir.actions.act_window">
         <field name="name">Construction BOQs</field>
         <field name="res_model">construction.boq</field>
-        <field name="view_mode">list,form</field>
+        <field name="view_mode">tree,form</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">Create a new Bill of Quantities</p>
         </field>
