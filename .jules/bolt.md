@@ -1,0 +1,3 @@
+## 2024-05-22 - Odoo Compute Field Splitting
+**Learning:** In Odoo, if a single `compute` method calculates both `store=True` and `store=False` fields, accessing the non-stored field (e.g., in a view) triggers the entire compute method. This can lead to heavy recalculations (and DB fetches) of the stored fields even if they are already up-to-date in the database.
+**Action:** Split compute methods so that non-stored fields (especially those used for UI/UX like progress bars) have their own lightweight compute method that depends on the stored fields, rather than re-computing everything from raw data.

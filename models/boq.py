@@ -238,7 +238,7 @@ class ConstructionBOQLine(models.Model):
     consumption_ids = fields.One2many('construction.boq.consumption', 'boq_line_id', string='Consumptions')
 
     # UI/UX Helper for Progress Bars
-    consumption_percentage = fields.Float(string='Progress', compute='_compute_consumption', store=False)
+    consumption_percentage = fields.Float(string='Progress', compute='_compute_consumption_percentage', store=False)
 
     @api.depends('quantity', 'estimated_rate')
     def _compute_budget_amount(self):
@@ -248,12 +248,22 @@ class ConstructionBOQLine(models.Model):
     @api.depends('quantity', 'budget_amount', 'consumption_ids.quantity', 'consumption_ids.amount')
     def _compute_consumption(self):
         for rec in self:
-            rec.consumed_quantity = sum(rec.consumption_ids.mapped('quantity'))
-            rec.consumed_amount = sum(rec.consumption_ids.mapped('amount'))
-            rec.remaining_quantity = rec.quantity - rec.consumed_quantity
-            rec.remaining_amount = rec.budget_amount - rec.consumed_amount
-            
-            # Compute Percentage for UI
+            # Performance: Iterate once over consumption_ids to avoid double mapped() overhead
+            c_qty = 0.0
+            c_amt = 0.0
+            for c in rec.consumption_ids:
+                c_qty += c.quantity
+                c_amt += c.amount
+
+            rec.consumed_quantity = c_qty
+            rec.consumed_amount = c_amt
+            rec.remaining_quantity = rec.quantity - c_qty
+            rec.remaining_amount = rec.budget_amount - c_amt
+
+    @api.depends('consumed_amount', 'budget_amount')
+    def _compute_consumption_percentage(self):
+        for rec in self:
+            # Performance: Depends only on stored fields, avoiding fetch of consumption_ids on read
             if rec.budget_amount > 0:
                 rec.consumption_percentage = (rec.consumed_amount / rec.budget_amount)
             else:
