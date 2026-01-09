@@ -12,6 +12,7 @@ class ConstructionBOQReport(models.Model):
     boq_line_id = fields.Many2one('construction.boq.line', string='BOQ Line', readonly=True)
     boq_id = fields.Many2one('construction.boq', string='BOQ Reference', readonly=True)
     project_id = fields.Many2one('project.project', string='Project', readonly=True)
+    company_id = fields.Many2one('res.company', string='Company', readonly=True)
     analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', readonly=True)
     product_id = fields.Many2one('product.product', string='Product', readonly=True)
     cost_type = fields.Selection([
@@ -49,6 +50,7 @@ class ConstructionBOQReport(models.Model):
                     l.id AS boq_line_id,
                     l.boq_id,
                     b.project_id,
+                    b.company_id,
                     l.analytic_account_id,
                     l.product_id,
                     l.cost_type,
