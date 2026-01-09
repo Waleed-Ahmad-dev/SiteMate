@@ -51,8 +51,8 @@
             <graph string="Project Cost Analysis" type="bar" stacked="False">
                 <field name="project_id"/>
                 <field name="cost_type"/>
-                <field name="consumed_amount" type="measure"/>
                 <field name="budget_amount" type="measure"/>
+                <field name="consumed_amount" type="measure"/>
             </graph>
         </field>
     </record>
