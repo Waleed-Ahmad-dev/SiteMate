@@ -213,7 +213,7 @@
         <field name="name">construction.boq.list</field>
         <field name="model">construction.boq</field>
         <field name="arch" type="xml">
-            <list string="Construction BOQs" decoration-info="state == 'draft'" decoration-muted="state == 'closed'">
+            <list string="Construction BOQs" decoration-info="state == 'draft'" decoration-muted="state == 'closed'" sample="1">
                 <field name="name"/>
                 <field name="version"/>
                 <field name="project_id"/>
@@ -230,7 +230,7 @@
         <field name="arch" type="xml">
             <list string="BOQ Sections" editable="bottom">
                 <field name="sequence" widget="handle"/>
-                <field name="name"/>
+                <field name="name" placeholder="e.g. Substructure"/>
                 <field name="company_id" groups="base.group_multi_company"/>
             </list>
         </field>

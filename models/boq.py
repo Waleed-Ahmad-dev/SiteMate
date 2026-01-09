@@ -225,7 +225,7 @@ class ConstructionBOQLine(models.Model):
     product_id = fields.Many2one('product.product', string='Product', domain="[('company_id', 'in', (company_id, False))]")
     
     task_id = fields.Many2one('project.task', string='Task', domain="[('project_id', '=', parent.project_id)]")
-    activity_code = fields.Char(string='Activity Code')
+    activity_code = fields.Char(string='Activity Code', help="Code used to link this BOQ line to a specific project task or schedule activity.")
 
     company_id = fields.Many2one('res.company', related='boq_id.company_id', string='Company', store=True, readonly=True)
     currency_id = fields.Many2one('res.currency', related='company_id.currency_id', string='Currency', readonly=True)
@@ -233,7 +233,7 @@ class ConstructionBOQLine(models.Model):
     display_type = fields.Selection([('line_section', 'Section'), ('line_note', 'Note')], default=False)
     name = fields.Char(string='Description', required=True)
     description = fields.Text(string='Long Description')
-    cost_type = fields.Selection([('material', 'Material'), ('labor', 'Labor'), ('subcontract', 'Subcontract'), ('service', 'Service'), ('overhead', 'Overhead')], string='Cost Type', required=True, default='material')
+    cost_type = fields.Selection([('material', 'Material'), ('labor', 'Labor'), ('subcontract', 'Subcontract'), ('service', 'Service'), ('overhead', 'Overhead')], string='Cost Type', required=True, default='material', help="Classifies the type of cost for reporting and analysis.")
     quantity = fields.Float(string='Quantity', default=1.0, required=True)
     uom_id = fields.Many2one('uom.uom', string='Unit of Measure', required=True)
     estimated_rate = fields.Monetary(string='Rate', currency_field='currency_id', default=0.0, required=True)
@@ -242,18 +242,18 @@ class ConstructionBOQLine(models.Model):
     expense_account_id = fields.Many2one('account.account', string='Expense Account', required=True, check_company=True)
     analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
 
-    analytic_distribution = fields.Json(string='Analytic Distribution')
+    analytic_distribution = fields.Json(string='Analytic Distribution', help="Distribute costs across multiple analytic accounts.")
     analytic_precision = fields.Integer(store=False, default=2)
 
     consumed_quantity = fields.Float(string='Consumed Qty', compute='_compute_consumption', store=True)
     consumed_amount = fields.Monetary(string='Consumed Amount', compute='_compute_consumption', currency_field='currency_id', store=True)
     remaining_quantity = fields.Float(string='Remaining Qty', compute='_compute_consumption', store=True)
     remaining_amount = fields.Monetary(string='Remaining Amount', compute='_compute_consumption', currency_field='currency_id', store=True)
-    allow_over_consumption = fields.Boolean(string='Allow Over Consumption', default=False)
+    allow_over_consumption = fields.Boolean(string='Allow Over Consumption', default=False, help="If checked, allows consumption to exceed the budgeted quantity/amount without error.")
     consumption_ids = fields.One2many('construction.boq.consumption', 'boq_line_id', string='Consumptions')
 
     # UI/UX Helper for Progress Bars
-    consumption_percentage = fields.Float(string='Progress', compute='_compute_consumption_percentage', store=False)
+    consumption_percentage = fields.Float(string='Progress', compute='_compute_consumption_percentage', store=False, help="Percentage of budget consumed.")
 
     @api.depends('quantity', 'estimated_rate')
     def _compute_budget_amount(self):
