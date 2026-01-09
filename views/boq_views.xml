@@ -98,9 +98,11 @@
                             </group>
                         </page>
                         <page string="Revisions" name="revisions">
-                            <field name="revision_ids" readonly="1">
+                            <field name="display_revision_ids" readonly="1">
                                 <list>
                                     <field name="create_date" string="Date"/>
+                                    <field name="original_boq_id" string="Snapshot"/>
+                                    <field name="new_boq_id" string="Result"/>
                                     <field name="revision_reason"/>
                                     <field name="approved_by"/>
                                 </list>
