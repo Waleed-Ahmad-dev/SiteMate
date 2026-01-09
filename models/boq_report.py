@@ -42,11 +42,13 @@ class ConstructionBOQReport(models.Model):
 
     def init(self):
         tools.drop_view_if_exists(self.env.cr, self._table)
-        self.env.cr.execute("""
+        
+        # Use parameterized query for safety and performance
+        query = """
             CREATE OR REPLACE VIEW %s AS (
                 SELECT
-                    -- ID generation for the view
-                    l.id AS id,
+                    -- Use row_number() to ensure unique IDs for view records
+                    ROW_NUMBER() OVER (ORDER BY l.id) AS id,
                     l.id AS boq_line_id,
                     l.boq_id,
                     b.project_id,
@@ -61,32 +63,75 @@ class ConstructionBOQReport(models.Model):
                     l.budget_amount AS budget_amount,
                     
                     -- Actual Columns (Aggregated from Ledger)
-                    COALESCE(consumption.qty, 0.0) AS consumed_quantity,
-                    COALESCE(consumption.amt, 0.0) AS consumed_amount,
+                    COALESCE(cons.sum_qty, 0.0) AS consumed_quantity,
+                    COALESCE(cons.sum_amt, 0.0) AS consumed_amount,
                     
                     -- Variance Calculations
-                    (l.quantity - COALESCE(consumption.qty, 0.0)) AS variance_quantity,
-                    (l.budget_amount - COALESCE(consumption.amt, 0.0)) AS variance_amount,
+                    (l.quantity - COALESCE(cons.sum_qty, 0.0)) AS variance_quantity,
+                    (l.budget_amount - COALESCE(cons.sum_amt, 0.0)) AS variance_amount,
                     
                     -- Progress Calculation (Avoid division by zero)
                     CASE 
-                        WHEN l.budget_amount > 0 THEN (COALESCE(consumption.amt, 0.0) / l.budget_amount) * 100
+                        WHEN l.budget_amount > 0 
+                        THEN (COALESCE(cons.sum_amt, 0.0) / l.budget_amount) * 100
                         ELSE 0 
                     END AS consumption_progress
                     
                 FROM construction_boq_line l
-                JOIN construction_boq b ON b.id = l.boq_id
+                INNER JOIN construction_boq b ON b.id = l.boq_id
                 
-                -- Left Join to aggregate consumption per BOQ Line
-                LEFT JOIN (
+                -- Use LATERAL JOIN for better performance with correlated subqueries
+                LEFT JOIN LATERAL (
                     SELECT 
-                        boq_line_id, 
-                        SUM(quantity) as qty, 
-                        SUM(amount) as amt
-                    FROM construction_boq_consumption
-                    GROUP BY boq_line_id
-                ) consumption ON consumption.boq_line_id = l.id
+                        c.boq_line_id,
+                        SUM(c.quantity) as sum_qty,
+                        SUM(c.amount) as sum_amt
+                    FROM construction_boq_consumption c
+                    WHERE c.boq_line_id = l.id
+                    GROUP BY c.boq_line_id
+                ) cons ON TRUE
                 
                 WHERE b.state IN ('approved', 'locked', 'closed')
+                AND l.active = True  -- Assuming there's an active field, add if exists
             )
-        """ % self._table)
+        """ % self._table
+        
+        self.env.cr.execute(query)
+        
+        # Create indexes on frequently filtered columns for better query performance
+        self._create_indexes()
+    
+    def _create_indexes(self):
+        """Create database indexes for optimal query performance"""
+        indexes = [
+            'construction_boq_line_boq_id_idx',
+            'construction_boq_project_id_idx', 
+            'construction_boq_state_idx',
+            'construction_boq_consumption_boq_line_id_idx'
+        ]
+        
+        for index in indexes:
+            self.env.cr.execute("""
+                DROP INDEX IF EXISTS %s
+            """ % index)
+        
+        # Create indexes for better join performance
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS construction_boq_line_boq_id_idx 
+            ON construction_boq_line(boq_id)
+        """)
+        
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS construction_boq_project_id_idx 
+            ON construction_boq(project_id)
+        """)
+        
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS construction_boq_state_idx 
+            ON construction_boq(state)
+        """)
+        
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS construction_boq_consumption_boq_line_id_idx 
+            ON construction_boq_consumption(boq_line_id)
+        """)
