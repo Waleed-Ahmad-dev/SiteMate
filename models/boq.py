@@ -262,8 +262,9 @@ class ConstructionBOQLine(models.Model):
 
     @api.depends('quantity', 'budget_amount', 'consumption_ids.quantity', 'consumption_ids.amount')
     def _compute_consumption(self):
-        for rec in self:
-            # Performance: Iterate once over consumption_ids
+        # 1. Handle unsaved records (NewIds) - fallback to python loop to ensure correctness
+        new_records = self.filtered(lambda r: not isinstance(r.id, int))
+        for rec in new_records:
             c_qty = 0.0
             c_amt = 0.0
             for c in rec.consumption_ids:
@@ -274,6 +275,36 @@ class ConstructionBOQLine(models.Model):
             rec.consumed_amount = c_amt
             rec.remaining_quantity = rec.quantity - c_qty
             rec.remaining_amount = rec.budget_amount - c_amt
+
+        # 2. Handle persisted records - use read_group for performance
+        real_records = self - new_records
+        if real_records:
+            # Initialize to 0 first (in case they have no consumptions)
+            for rec in real_records:
+                rec.consumed_quantity = 0.0
+                rec.consumed_amount = 0.0
+                rec.remaining_quantity = rec.quantity
+                rec.remaining_amount = rec.budget_amount
+
+            # Fetch aggregated data from DB
+            data = self.env['construction.boq.consumption'].read_group(
+                [('boq_line_id', 'in', real_records.ids)],
+                ['boq_line_id', 'quantity', 'amount'],
+                ['boq_line_id']
+            )
+            data_map = {d['boq_line_id'][0]: d for d in data}
+
+            for rec in real_records:
+                group = data_map.get(rec.id)
+                if group:
+                    c_qty = group['quantity']
+                    c_amt = group['amount']
+
+                    rec.consumed_quantity = c_qty
+                    rec.consumed_amount = c_amt
+                    rec.remaining_quantity = rec.quantity - c_qty
+                    rec.remaining_amount = rec.budget_amount - c_amt
+
 
     @api.depends('consumed_amount', 'budget_amount')
     def _compute_consumption_percentage(self):
