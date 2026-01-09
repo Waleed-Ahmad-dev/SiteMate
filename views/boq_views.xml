@@ -64,7 +64,8 @@
                                     <field name="sequence" widget="handle"/>
                                     <field name="display_type" column_invisible="1"/>
                                     <field name="company_id" column_invisible="1"/>
-                                    <field name="section_id" optional="hide"/>
+                                    
+                                    <field name="section_id" optional="show"/>
                                     
                                     <field name="task_id" optional="show" domain="[('project_id', '=', parent.project_id)]" options="{'no_create': True}"/>
                                     <field name="activity_code" optional="show"/>
@@ -140,6 +141,18 @@
         </field>
     </record>
 
+    <record id="view_construction_boq_section_tree" model="ir.ui.view">
+        <field name="name">construction.boq.section.list</field>
+        <field name="model">construction.boq.section</field>
+        <field name="arch" type="xml">
+            <list string="BOQ Sections" editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
     <record id="action_construction_boq" model="ir.actions.act_window">
         <field name="name">Construction BOQs</field>
         <field name="res_model">construction.boq</field>
@@ -149,6 +162,18 @@
         </field>
     </record>
 
+    <record id="action_construction_boq_section" model="ir.actions.act_window">
+        <field name="name">BOQ Sections</field>
+        <field name="res_model">construction.boq.section</field>
+        <field name="view_mode">list</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Define standard BOQ Sections here (e.g., Civil, Electrical).</p>
+        </field>
+    </record>
+
     <menuitem id="menu_construction_root" name="Construction" web_icon="project,static/description/icon.png" sequence="10"/>
     <menuitem id="menu_construction_boq" name="BOQs" parent="menu_construction_root" action="action_construction_boq" sequence="1"/>
+    
+    <menuitem id="menu_construction_configuration" name="Configuration" parent="menu_construction_root" sequence="100"/>
+    <menuitem id="menu_construction_boq_section" name="BOQ Sections" parent="menu_construction_configuration" action="action_construction_boq_section" sequence="1"/>
 </odoo>
