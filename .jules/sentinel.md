@@ -14,3 +14,10 @@ record.invalidate_recordset()
 if record.value > limit:
     raise ...
 ```
+
+## 2025-02-12 - Business Logic Bypass via API
+**Vulnerability:** Critical business logic checks (like budget limits) were implemented only in the workflow methods (e.g., `account.move.action_post`) but not in the data model's `create`/`write` methods. This allows users with API access (like `xml-rpc` or `import` capabilities) or other modules to create records directly, bypassing the intended validations.
+
+**Learning:** In Odoo, workflow buttons are merely "happy paths". Security constraints and data integrity rules must be enforced at the lowest level possible (the Model's `create`, `write`, `unlink` methods or SQL constraints) to prevent bypasses.
+
+**Prevention:** Always identify the "invariant" of the model (e.g., "Consumption cannot exceed Budget") and enforce it in `api.constrains` or by overriding `create`/`write`. Workflow methods should handle the process, but the Model must defend its own integrity.

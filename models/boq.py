@@ -398,6 +398,23 @@ class ConstructionBOQConsumption(models.Model):
     date = fields.Date(string='Date', default=fields.Date.context_today, required=True)
     user_id = fields.Many2one('res.users', string='User', default=lambda self: self.env.user)
 
+    @api.model_create_multi
+    def create(self, vals_list):
+        for vals in vals_list:
+            # Security Fix: Enforce budget limits on direct creation (e.g. via API)
+            # This prevents bypassing the check_consumption logic in AccountMove
+            if vals.get('boq_line_id'):
+                line = self.env['construction.boq.line'].browse(vals['boq_line_id'])
+                qty = vals.get('quantity', 0.0)
+                amt = vals.get('amount', 0.0)
+
+                # Check limits if positive consumption is added.
+                # Negative values (refunds) are allowed to increase remaining budget.
+                if qty > 0 or amt > 0:
+                    line.check_consumption(qty, amt)
+
+        return super(ConstructionBOQConsumption, self).create(vals_list)
+
     def init(self):
         self.env.cr.execute("""
             REVOKE UPDATE, DELETE ON construction_boq_consumption FROM PUBLIC;
