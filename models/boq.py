@@ -14,13 +14,13 @@ class ConstructionBOQ(models.Model):
     name = fields.Char(string='BOQ Reference', required=True, copy=False, default='New', tracking=True)
     active = fields.Boolean(string='Active', default=True, help="Set to False to hide old versions.")
     
-    project_id = fields.Many2one('project.project', string='Project', required=True, tracking=True)
+    project_id = fields.Many2one('project.project', string='Project', required=True, tracking=True, help="Select the construction project this BOQ belongs to.")
     # UX: Add placeholder for better usability
-    analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', required=True, tracking=True)
+    analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', required=True, tracking=True, help="Select the analytic account for cost tracking and budget analysis.")
     company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
     
     # -- Versioning Fields --
-    version = fields.Integer(string='Version', default=1, required=True, readonly=True, copy=False)
+    version = fields.Integer(string='Version', default=1, required=True, readonly=True, copy=False, help="Version number of the BOQ, incremented on revision.")
     previous_boq_id = fields.Many2one('construction.boq', string='Previous Version', readonly=True, copy=False)
     
     state = fields.Selection([
@@ -29,7 +29,7 @@ class ConstructionBOQ(models.Model):
         ('approved', 'Approved'),
         ('locked', 'Locked'),
         ('closed', 'Closed')
-    ], string='Status', default='draft', required=True, tracking=True, copy=False)
+    ], string='Status', default='draft', required=True, tracking=True, copy=False, help="Current status of the BOQ workflow.")
     
     approval_date = fields.Date(string='Approval Date', readonly=True, copy=False, tracking=True)
     approved_by = fields.Many2one('res.users', string='Approved By', readonly=True, copy=False, tracking=True)
