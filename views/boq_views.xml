@@ -105,8 +105,8 @@
                     <group>
                         <group string="Project Scope">
                             <field name="active" invisible="1"/>
-                            <field name="project_id" readonly="state == 'closed'"/>
-                            <field name="analytic_account_id" readonly="state == 'closed'" options="{'no_create': True}"/>
+                            <field name="project_id" readonly="state == 'closed'" placeholder="Select a project..."/>
+                            <field name="analytic_account_id" readonly="state == 'closed'" options="{'no_create': True}" placeholder="Select cost center..."/>
                             <field name="company_id" groups="base.group_multi_company" readonly="state == 'closed'"/>
                         </group>
                         <group string="Control &amp; Versioning">
@@ -241,6 +241,14 @@
         <field name="res_model">construction.boq</field>
         <field name="view_mode">list,form</field>
         <field name="context">{'search_default_group_project': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create a new Construction BOQ
+            </p><p>
+                Manage your project budgets, track costs, and handle revisions.
+                Start by selecting a project and defining the budget lines.
+            </p>
+        </field>
     </record>
 
     <record id="action_construction_boq_section" model="ir.actions.act_window">
