@@ -249,7 +249,11 @@
         <field name="view_mode">list</field>
     </record>
 
-    <menuitem id="menu_construction_root" name="Construction" web_icon="project,static/description/icon.png" sequence="10"/>
+    <menuitem id="menu_construction_root" 
+        name="Construction" 
+        web_icon="entrpryz_construction_boq,static/description/icon.png" 
+        sequence="10"
+    />
     <menuitem id="menu_construction_boq" name="BOQs" parent="menu_construction_root" action="action_construction_boq" sequence="1"/>
     <menuitem id="menu_construction_configuration" name="Configuration" parent="menu_construction_root" sequence="100"/>
     <menuitem id="menu_construction_boq_section" name="BOQ Sections" parent="menu_construction_configuration" action="action_construction_boq_section" sequence="1"/>
