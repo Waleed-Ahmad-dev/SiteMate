@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- ./views/boq_views.xml -->
 <odoo>
     <!-- BOQ Form View -->
     <record id="view_construction_boq_form" model="ir.ui.view">
@@ -8,18 +7,18 @@
         <field name="arch" type="xml">
             <form string="Construction BOQ">
                 <header>
-                    <button name="action_submit" string="Submit for Approval" type="object" class="oe_highlight" attrs="{'invisible': [('state', '!=', 'draft')]}"/>
-                    <button name="action_approve" string="Approve" type="object" class="oe_highlight" attrs="{'invisible': [('state', '!=', 'submitted')]}"/>
-                    <button name="action_lock" string="Lock" type="object" class="oe_highlight" attrs="{'invisible': [('state', '!=', 'approved')]}"/>
-                    <button name="action_revise" string="Revise Manually" type="object" attrs="{'invisible': [('state', 'not in', ('approved', 'locked'))]}" confirm="This will archive the current approved BOQ and create a new draft version. Continue?"/>
-                    <button name="action_close" string="Close" type="object" attrs="{'invisible': [('state', 'not in', ('approved', 'locked'))]}" confirm="This will permanently close the BOQ. You cannot reopen it. Continue?"/>
+                    <button name="action_submit" string="Submit for Approval" type="object" class="oe_highlight" states="draft"/>
+                    <button name="action_approve" string="Approve" type="object" class="oe_highlight" states="submitted"/>
+                    <button name="action_lock" string="Lock" type="object" class="oe_highlight" states="approved"/>
+                    <button name="action_revise" string="Revise Manually" type="object" states="approved,locked" confirm="This will archive the current approved BOQ and create a new draft version. Continue?"/>
+                    <button name="action_close" string="Close" type="object" states="approved,locked" confirm="This will permanently close the BOQ. You cannot reopen it. Continue?"/>
                     <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved,locked,closed"/>
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
-                        <button name="action_view_history" type="object" class="oe_stat_button" icon="fa-history" string="History" attrs="{'invisible': [('version', '=', 1)]}"/>
+                        <button name="action_view_history" type="object" class="oe_stat_button" icon="fa-history" string="History" invisible="version == 1"/>
                     </div>
-                    <widget name="web_ribbon" title="Archived" bg_color="bg-danger" attrs="{'invisible': [('active', '=', True)]}"/>
+                    <widget name="web_ribbon" title="Archived" bg_color="bg-danger" invisible="active"/>
 
                     <div class="oe_title">
                         <label for="name" class="oe_edit_only"/>
@@ -29,29 +28,29 @@
                     </div>
                     <group>
                         <group string="Project Scope">
-                            <field name="active" attrs="{'invisible': True}"/>
-                            <field name="project_id" attrs="{'readonly': [('state', '=', 'closed')]}" placeholder="Select a project..."/>
-                            <field name="analytic_account_id" attrs="{'readonly': [('state', '=', 'closed')]}" options="{'no_create': True}" placeholder="Select cost center..."/>
-                            <field name="company_id" groups="base.group_multi_company" attrs="{'readonly': [('state', '=', 'closed')]}"/>
+                            <field name="active" invisible="1"/>
+                            <field name="project_id" readonly="state == 'closed'" placeholder="Select a project..."/>
+                            <field name="analytic_account_id" readonly="state == 'closed'" options="{'no_create': True}" placeholder="Select cost center..."/>
+                            <field name="company_id" groups="base.group_multi_company" readonly="state == 'closed'"/>
                         </group>
                         <group string="Control &amp; Versioning">
                             <label for="version" string="Version"/>
                             <div class="o_row">
                                 <field name="version" readonly="1" class="fw-bold"/>
-                                <span class="text-muted" attrs="{'invisible': [('previous_boq_id', '=', False)]}">
+                                <span class="text-muted" invisible="not previous_boq_id">
                                     (Previous: <field name="previous_boq_id" readonly="1" options="{'no_open': True}"/>
 )
                                 </span>
                             </div>
                             <field name="approval_date"/>
                             <field name="approved_by" widget="many2one_avatar_user"/>
-                            <field name="currency_id" attrs="{'invisible': True}"/>
+                            <field name="currency_id" invisible="1"/>
                         </group>
                     </group>
 
                     <notebook>
                         <page string="Budget Lines" name="lines">
-                            <field name="boq_line_ids" widget="section_and_note_one2many" attrs="{'readonly': [('state', '=', 'closed')]}">
+                            <field name="boq_line_ids" widget="section_and_note_one2many" readonly="state == 'closed'">
                                 <list decoration-danger="remaining_amount &lt; 0" decoration-warning="remaining_amount &lt; (budget_amount * 0.1)">
                                     <control>
                                         <create name="add_line_control" string="Add a line"/>
@@ -63,21 +62,21 @@
                                     <field name="display_type" column_invisible="1"/>
 
                                     <!-- Section/Note Display -->
-                                    <field name="name" widget="section_and_note_text" attrs="{'invisible': [('display_type', '=', False)]}"/>
+                                    <field name="name" widget="section_and_note_text" invisible="not display_type"/>
 
                                     <!-- Regular Line Display -->
-                                    <field name="product_id" attrs="{'invisible': [('display_type', '!=', False)]}" widget="many2one_avatar"/>
-                                    <field name="quantity" attrs="{'invisible': [('display_type', '!=', False)]}" string="Budget Qty"/>
-                                    <field name="estimated_rate" attrs="{'invisible': [('display_type', '!=', False)]}" string="Budget Rate"/>
-                                    <field name="budget_amount" attrs="{'invisible': [('display_type', '!=', False)]}" widget="monetary" sum="Total Budget"/>
-                                    <field name="remaining_amount" attrs="{'invisible': [('display_type', '!=', False)]}" widget="monetary" string="Available Budget"/>
+                                    <field name="product_id" invisible="display_type" widget="many2one_avatar"/>
+                                    <field name="quantity" invisible="display_type" string="Budget Qty"/>
+                                    <field name="estimated_rate" invisible="display_type" string="Budget Rate"/>
+                                    <field name="budget_amount" invisible="display_type" widget="monetary" sum="Total Budget"/>
+                                    <field name="remaining_amount" invisible="display_type" widget="monetary" string="Available Budget"/>
 
                                     <field name="currency_id" column_invisible="1"/>
                                     <field name="product_config_valid" column_invisible="1"/>
 
                                     <!-- Action Button Column -->
                                     <field name="id" widget="handle"/>
-                                    <button name="action_open_advanced_view" type="object" icon="fa-external-link" string="Advanced" attrs="{'invisible': [('display_type', '!=', False)]}" class="oe_edit_only"/>
+                                    <button name="action_open_advanced_view" type="object" icon="fa-external-link" string="Advanced" invisible="display_type" class="oe_edit_only"/>
                                 </list>
                             </field>
 
@@ -154,8 +153,6 @@
         </field>
     </record>
 
-    <!-- Remove old section views since we're using display_type -->
-
     <record id="action_construction_boq" model="ir.actions.act_window">
         <field name="name">Construction BOQs</field>
         <field name="res_model">construction.boq</field>
@@ -174,6 +171,4 @@
 
     <menuitem id="menu_construction_root" name="Construction" web_icon="entrpryz_construction_boq,static/description/icon.png" sequence="10" />
     <menuitem id="menu_construction_boq" name="BOQs" parent="menu_construction_root" action="action_construction_boq" sequence="1"/>
-
-    <!-- Remove old section menu items -->
 </odoo>
