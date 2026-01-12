@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- ./security/construction_security.xml -->
 <odoo>
     <data noupdate="1">
         <!-- All rules should use consistent field access patterns -->
@@ -18,17 +19,11 @@
             <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
         </record>
 
-        <!-- Rule for BOQ Consumption model - Optimized to store company_id directly -->
+        <!-- Rule for BOQ Consumption model -->
         <record id="rule_construction_boq_consumption_multi_company" model="ir.rule">
             <field name="name">Construction BOQ Consumption Multi-Company</field>
             <field name="model_id" ref="model_construction_boq_consumption"/>
             <field name="global" eval="True"/>
-            <!-- 
-            IMPORTANT: For optimal performance, ensure construction_boq_consumption
-            model has a company_id field (computed or related) to avoid join queries.
-            If not, consider adding: 
-            company_id = fields.Many2one('res.company', related='boq_line_id.company_id', store=True)
-            -->
             <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
         </record>
 
