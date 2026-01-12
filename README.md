@@ -180,3 +180,9 @@ Consumption is typically recorded automatically via Purchase Orders or Stock Pic
 **Author**: Waleed Ahmad (Shadow Scripter)
 **Website**: [Check out my portfolio](https://www.shadowscripter.online)
 **License**: LGPL-3
+
+---
+
+## 8. License
+
+This module is distributed under the [LGPL-3](https://www.gnu.org/licenses/lgpl-3.0.en.html) license.
