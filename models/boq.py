@@ -270,8 +270,10 @@ class ConstructionBOQLine(models.Model):
     product_id = fields.Many2one('product.product', string='Product',
         domain="[('company_id', 'in', (company_id, False))]")
     
-    # Main Fields
-    name = fields.Char(string='Description', required=True, compute='_compute_name', store=True, readonly=False)
+    # [FIXED] Removed compute='_compute_name' and store=True. 
+    # This prevents the 'Mandatory field not set' error when adding Notes/Sections or before a product is selected.
+    # We now rely on onchange methods to auto-fill this field.
+    name = fields.Char(string='Description', required=True)
     
     # [FIX] Removed required=True from these fields. They are enforced via python constraint only for non-section lines.
     quantity = fields.Float(string='Budget Qty', default=1.0)
@@ -331,14 +333,8 @@ class ConstructionBOQLine(models.Model):
                 if rec.quantity <= 0:
                      raise ValidationError(_('Quantity must be positive for BOQ line: %s') % rec.name)
 
-    @api.depends('product_id', 'section_id')
-    def _compute_name(self):
-        """Auto-fill name from product or section"""
-        for rec in self:
-            if rec.display_type == 'line_section' and rec.section_id:
-                rec.name = rec.section_id.name
-            elif rec.product_id and not rec.name:
-                rec.name = rec.product_id.name
+    # [FIXED] Deleted _compute_name method as it conflicts with required=True on save.
+    # Logic moved/relied upon in _onchange_product_id and _onchange_section_id.
 
     @api.depends('product_id')
     def _compute_product_config_valid(self):
@@ -507,45 +503,45 @@ class ConstructionBOQLine(models.Model):
             'context': {'form_view_ref': 'entrpryz_construction_boq.view_construction_boq_line_advanced_form'}
         }
 
-    class ConstructionBOQConsumption(models.Model):
-        _name = 'construction.boq.consumption'
-        _description = 'BOQ Consumption Ledger'
-        _order = 'date desc, id desc'
+class ConstructionBOQConsumption(models.Model):
+    _name = 'construction.boq.consumption'
+    _description = 'BOQ Consumption Ledger'
+    _order = 'date desc, id desc'
     
-        boq_line_id = fields.Many2one('construction.boq.line', string='BOQ Line', required=True, ondelete='restrict', index=True)
-        company_id = fields.Many2one('res.company', related='boq_line_id.company_id', string='Company', store=True, readonly=True)
-        
-        source_model = fields.Char(string='Source Model', required=True)
-        source_id = fields.Integer(string='Source ID', required=True)
-        
-        quantity = fields.Float(string='Quantity Consumed')
-        amount = fields.Monetary(string='Amount Consumed', currency_field='currency_id')
-        currency_id = fields.Many2one('res.currency', related='boq_line_id.currency_id', store=True)
-        
-        date = fields.Date(string='Date', default=fields.Date.context_today, required=True)
-        user_id = fields.Many2one('res.users', string='User', default=lambda self: self.env.user)
+    boq_line_id = fields.Many2one('construction.boq.line', string='BOQ Line', required=True, ondelete='restrict', index=True)
+    company_id = fields.Many2one('res.company', related='boq_line_id.company_id', string='Company', store=True, readonly=True)
     
-        @api.model_create_multi
-        def create(self, vals_list):
-            line_ids = {vals['boq_line_id'] for vals in vals_list if vals.get('boq_line_id')}
-            lines = self.env['construction.boq.line'].browse(list(line_ids))
-            line_map = {line.id: line for line in lines}
-            
-            for vals in vals_list:
-                line_id = vals.get('boq_line_id')
-                if line_id and line_id in line_map:
-                    line = line_map[line_id]
-                    # [FIX] Do not process consumption for Sections
-                    if line.display_type:
-                         raise ValidationError(_("Cannot record consumption on a Section/Note BOQ line."))
+    source_model = fields.Char(string='Source Model', required=True)
+    source_id = fields.Integer(string='Source ID', required=True)
+    
+    quantity = fields.Float(string='Quantity Consumed')
+    amount = fields.Monetary(string='Amount Consumed', currency_field='currency_id')
+    currency_id = fields.Many2one('res.currency', related='boq_line_id.currency_id', store=True)
+    
+    date = fields.Date(string='Date', default=fields.Date.context_today, required=True)
+    user_id = fields.Many2one('res.users', string='User', default=lambda self: self.env.user)
+    
+    @api.model_create_multi
+    def create(self, vals_list):
+        line_ids = {vals['boq_line_id'] for vals in vals_list if vals.get('boq_line_id')}
+        lines = self.env['construction.boq.line'].browse(list(line_ids))
+        line_map = {line.id: line for line in lines}
+        
+        for vals in vals_list:
+            line_id = vals.get('boq_line_id')
+            if line_id and line_id in line_map:
+                line = line_map[line_id]
+                # [FIX] Do not process consumption for Sections
+                if line.display_type:
+                     raise ValidationError(_("Cannot record consumption on a Section/Note BOQ line."))
 
-                    qty = vals.get('quantity', 0.0)
-                    amt = vals.get('amount', 0.0)
-                    if qty > 0 or amt > 0:
-                        line.check_consumption(qty, amt)
-            return super(ConstructionBOQConsumption, self).create(vals_list)
+                qty = vals.get('quantity', 0.0)
+                amt = vals.get('amount', 0.0)
+                if qty > 0 or amt > 0:
+                    line.check_consumption(qty, amt)
+        return super(ConstructionBOQConsumption, self).create(vals_list)
     
-        def init(self):
-            self.env.cr.execute("""
-                REVOKE UPDATE, DELETE ON construction_boq_consumption FROM PUBLIC;
-            """)
+    def init(self):
+        self.env.cr.execute("""
+            REVOKE UPDATE, DELETE ON construction_boq_consumption FROM PUBLIC;
+        """)

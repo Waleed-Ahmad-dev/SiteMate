@@ -1,0 +1,2329 @@
+========== ./__init__.py ==========
+from . import models
+
+========== ./__manifest__.py ==========
+# -*- coding: utf-8 -*-
+{
+    'name': 'Entrpryz Construction BOQ',
+    'version': '1.0',
+    'category': 'Construction',
+    'summary': 'Construction BOQ Management',
+    'author': 'Waleed Ahmad (Shadow Scripter)',
+    'website': 'https://www.shadowscripter.online',
+    'depends': [
+        'base', 'project', 'purchase', 'stock', 'stock_account',
+        'account', 'mail', 'analytic'
+    ],
+    'data': [
+        'security/security.xml',
+        'security/ir.model.access.csv',
+        'security/construction_security.xml',
+        'views/project_task_views.xml',
+        'views/boq_views.xml',
+        'views/purchase_views.xml',
+        'views/stock_views.xml',
+        'views/account_move_views.xml',
+        'views/boq_report_views.xml',
+        'views/boq_line_views.xml',
+    ],
+    'installable': True,
+    'application': True,
+    'license': 'LGPL-3',
+}
+========== ./models/account_move.py ==========
+# -*- coding: utf-8 -*-
+from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError
+from collections import defaultdict
+
+class AccountMove(models.Model):
+    _inherit = 'account.move'
+
+    def action_post(self):
+        """
+        Override action_post to Create BOQ Consumption Ledger entries.
+        Includes Concurrency Locking (Step 3.2).
+        """
+        # 1. Identify moves that need BOQ processing (Vendor Bills/Refunds)
+        moves_to_process = self.filtered(lambda m: m.is_invoice(include_receipts=True))
+        
+        # Early exit if no moves to process
+        if not moves_to_process:
+            return super(AccountMove, self).action_post()
+        
+        Consumption = self.env['construction.boq.consumption']
+        
+        # Collect all BOQ lines that need to be locked
+        boq_lines_to_lock = set()
+        lines_with_boq = []
+        
+        for move in moves_to_process:
+            for line in move.invoice_line_ids:
+                if line.boq_line_id:
+                    boq_lines_to_lock.add(line.boq_line_id.id)
+                    lines_with_boq.append((move, line))
+        
+        # Step 3.2: Implement Concurrency Locking - Lock all BOQ lines at once
+        if boq_lines_to_lock:
+            self.env.cr.execute(
+                """
+                SELECT id FROM construction_boq_line
+                WHERE id IN %s FOR UPDATE
+                """,
+                (tuple(boq_lines_to_lock),)
+            )
+            
+            # Bulk invalidate cache for all BOQ lines
+            boq_line_ids = list(boq_lines_to_lock)
+            boq_lines = self.env['construction.boq.line'].browse(boq_line_ids)
+            boq_lines.invalidate_recordset(['id'])
+        
+        # Group lines by company and currency for batch processing
+        consumption_vals_list = []
+        
+        for move, line in lines_with_boq:
+            # Determine direction: Refund reduces consumption, Invoice increases it
+            sign = -1 if move.move_type in ('in_refund', 'out_refund') else 1
+            
+            # Convert quantity based on move type
+            qty_to_consume = line.quantity * sign
+            
+            # Handle Currency Conversion for Amount
+            # BOQ is in Company Currency, Bill might be in Foreign Currency
+            amount_currency = line.currency_id
+            amount_boq_currency = line.boq_line_id.currency_id
+            
+            if amount_currency != amount_boq_currency:
+                # Convert line amount to BOQ currency
+                amount_to_consume = amount_currency._convert(
+                    line.price_subtotal,
+                    amount_boq_currency,
+                    move.company_id,
+                    move.date or fields.Date.today()
+                ) * sign
+            else:
+                amount_to_consume = line.price_subtotal * sign
+            
+            # Validate Limits - batch validation would be better but depends on implementation
+            # We check positive consumption against remaining budget.
+            # Refunds (negative) are generally allowed as they free up budget.
+            if sign > 0:
+                line.boq_line_id.check_consumption(qty_to_consume, amount_to_consume)
+            
+            # Prepare consumption entry
+            consumption_vals_list.append({
+                'boq_line_id': line.boq_line_id.id,
+                'source_model': 'account.move.line',
+                'source_id': line.id,
+                'quantity': qty_to_consume,
+                'amount': amount_to_consume,
+                'date': move.date or fields.Date.today(),
+                'user_id': self.env.user.id
+            })
+        
+        # Create all consumption records in batch
+        if consumption_vals_list:
+            Consumption.create(consumption_vals_list)
+        
+        # 2. Call super to perform standard posting
+        return super(AccountMove, self).action_post()
+
+class AccountMoveLine(models.Model):
+    _inherit = 'account.move.line'
+
+    boq_line_id = fields.Many2one(
+        'construction.boq.line',
+        string='BOQ Item',
+        index=True,
+        # [FIX] Added display_type = False to domain
+        domain="[('boq_id.state', 'in', ('approved', 'locked')), ('display_type', '=', False)]",
+        help="Link this invoice line to a BOQ line for cost tracking."
+    )
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """
+        Override create to automatically pull the BOQ Line from the linked Purchase Order Line.
+        This ensures that when 'Create Bill' is clicked on a PO, the BOQ reference is preserved.
+        """
+        # Collect purchase line IDs that need boq_line_id resolution
+        purchase_line_ids = []
+        purchase_line_map = {}
+        
+        for i, vals in enumerate(vals_list):
+            if vals.get('purchase_line_id') and not vals.get('boq_line_id'):
+                purchase_line_ids.append(vals['purchase_line_id'])
+                purchase_line_map[i] = vals['purchase_line_id']
+        
+        # Bulk fetch purchase order lines with their BOQ lines
+        if purchase_line_ids:
+            po_lines = self.env['purchase.order.line'].browse(purchase_line_ids)
+            # Use read() to fetch specific fields efficiently
+            po_line_data = po_lines.read(['id', 'boq_line_id', 'boq_line_id.analytic_distribution'])
+            
+            # Create mapping for quick lookup
+            po_line_info = {}
+            for data in po_line_data:
+                po_line_info[data['id']] = {
+                    'boq_line_id': data['boq_line_id'][0] if data['boq_line_id'] else False,
+                    'analytic_distribution': data.get('boq_line_id.analytic_distribution', False)
+                }
+            
+            # Apply the BOQ line information
+            for i, purchase_line_id in purchase_line_map.items():
+                info = po_line_info.get(purchase_line_id)
+                if info and info['boq_line_id']:
+                    vals_list[i]['boq_line_id'] = info['boq_line_id']
+                    # Subtask 4.1: Propagate Analytics to Bills (Create)
+                    if info['analytic_distribution'] and not vals_list[i].get('analytic_distribution'):
+                        vals_list[i]['analytic_distribution'] = info['analytic_distribution']
+        
+        return super(AccountMoveLine, self).create(vals_list)
+
+    @api.onchange('purchase_line_id')
+    def _onchange_purchase_line_id_boq(self):
+        """
+        Handle UI updates when a user manually selects a PO line on a Vendor Bill.
+        """
+        if self.purchase_line_id and self.purchase_line_id.boq_line_id:
+            self.boq_line_id = self.purchase_line_id.boq_line_id
+            # Subtask 4.1: Propagate Analytics to Bills (OnChange PO)
+            if self.boq_line_id.analytic_distribution:
+                self.analytic_distribution = self.boq_line_id.analytic_distribution
+
+    @api.onchange('boq_line_id')
+    def _onchange_boq_line_id_analytics(self):
+        """
+        Subtask 4.1: Propagate Analytics to Bills (OnChange BOQ)
+        Handle UI updates when a user manually selects a BOQ line directly.
+        """
+        if self.boq_line_id and self.boq_line_id.analytic_distribution:
+            self.analytic_distribution = self.boq_line_id.analytic_distribution
+========== ./models/boq.py ==========
+# -*- coding: utf-8 -*-
+import re
+from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError, UserError
+
+class ConstructionBOQ(models.Model):
+    _name = 'construction.boq'
+    _description = 'Construction Bill of Quantities'
+    _inherit = ['mail.thread', 'mail.activity.mixin']
+    _order = 'id desc'
+
+    # -- Header Fields --
+    name = fields.Char(string='BOQ Reference', required=True, copy=False, default='New', tracking=True)
+    active = fields.Boolean(string='Active', default=True, help="Set to False to hide old versions.")
+    
+    project_id = fields.Many2one('project.project', string='Project', required=True, tracking=True, help="Select the construction project this BOQ belongs to.")
+    analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', required=True, tracking=True, help="Select the analytic account for cost tracking and budget analysis.")
+    company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
+    
+    # -- Versioning Fields --
+    version = fields.Integer(string='Version', default=1, required=True, readonly=True, copy=False, help="Version number of the BOQ, incremented on revision.")
+    previous_boq_id = fields.Many2one('construction.boq', string='Previous Version', readonly=True, copy=False)
+    
+    state = fields.Selection([
+        ('draft', 'Draft'),
+        ('submitted', 'Submitted'),
+        ('approved', 'Approved'),
+        ('locked', 'Locked'),
+        ('closed', 'Closed')
+    ], string='Status', default='draft', required=True, tracking=True, copy=False, help="Current status of the BOQ workflow.")
+    
+    approval_date = fields.Date(string='Approval Date', readonly=True, copy=False, tracking=True)
+    approved_by = fields.Many2one('res.users', string='Approved By', readonly=True, copy=False, tracking=True)
+    currency_id = fields.Many2one('res.currency', related='company_id.currency_id', string='Currency', readonly=True)
+    
+    boq_line_ids = fields.One2many('construction.boq.line', 'boq_id', string='BOQ Lines')
+    total_budget = fields.Monetary(string='Total Budget', compute='_compute_total_budget', currency_field='currency_id', store=True, tracking=True)
+    
+    revision_ids = fields.One2many('construction.boq.revision', 'original_boq_id', string='Revisions (Technical)', copy=False)
+    
+    display_revision_ids = fields.Many2many('construction.boq.revision', compute='_compute_display_revision_ids', string='Revision History')
+
+    @api.depends('project_id', 'revision_ids')
+    def _compute_display_revision_ids(self):
+        if not self:
+            self.display_revision_ids = False
+            return
+            
+        project_ids = self.mapped('project_id').ids
+        if not project_ids:
+            self.display_revision_ids = False
+            return
+            
+        revisions = self.env['construction.boq.revision'].search([
+            '|', ('original_boq_id.project_id', 'in', project_ids),
+                 ('new_boq_id.project_id', 'in', project_ids)
+        ])
+        
+        revision_map = {}
+        for revision in revisions:
+            original_project_id = revision.original_boq_id.project_id.id
+            revision_map.setdefault(original_project_id, []).append(revision.id)
+            new_project_id = revision.new_boq_id.project_id.id
+            revision_map.setdefault(new_project_id, []).append(revision.id)
+        
+        for boq in self:
+            revision_ids = revision_map.get(boq.project_id.id, [])
+            boq.display_revision_ids = [(6, 0, revision_ids)]
+
+    @api.depends('boq_line_ids.budget_amount', 'currency_id')
+    def _compute_total_budget(self):
+        for rec in self:
+            # [FIX] Only sum actual lines, ignore sections/notes to prevent type errors
+            lines = rec.boq_line_ids.filtered(lambda l: not l.display_type)
+            rec.total_budget = sum(lines.mapped('budget_amount'))
+
+    @api.onchange('project_id')
+    def _onchange_project_id(self):
+        if self.project_id and self.project_id.account_id:
+            self.analytic_account_id = self.project_id.account_id
+
+    # -- Workflow Actions --
+    def action_submit(self):
+        # [FIX] Ensure we have actual product lines, not just sections
+        boqs_with_valid_lines = self.filtered(lambda r: r.boq_line_ids.filtered(lambda l: not l.display_type))
+        if len(boqs_with_valid_lines) != len(self):
+            raise ValidationError(_('You cannot submit a BOQ with no product lines.'))
+        
+        self.write({'state': 'submitted'})
+
+    def action_approve(self):
+        self._check_boq_before_approval()
+        self._check_one_active_boq()
+        
+        self.write({
+            'state': 'approved',
+            'approval_date': fields.Date.today(),
+            'approved_by': self.env.user.id
+        })
+
+    def action_lock(self):
+        self.write({'state': 'locked'})
+
+    def action_close(self):
+        self.write({'state': 'closed'})
+
+    def action_view_history(self):
+        self.ensure_one()
+        return {
+            'name': _('Version History'),
+            'type': 'ir.actions.act_window',
+            'res_model': 'construction.boq',
+            'view_mode': 'list,form',
+            'domain': [('project_id', '=', self.project_id.id), ('id', '!=', self.id)],
+            'context': {'active_test': False},
+        }
+
+    def action_revise(self):
+        self.create_revision_snapshot()
+        return True
+
+    # -------------------------------------------------------------------------
+    # COPY-ON-WRITE (AUTO VERSIONING) LOGIC
+    # -------------------------------------------------------------------------
+    def create_revision_snapshot(self):
+        boqs_to_revise = self.filtered(
+            lambda b: b.state in ['submitted', 'approved', 'locked']
+        )
+        
+        if not boqs_to_revise:
+            return
+            
+        revision_vals_list = []
+        boq_update_vals = {}
+        messages_to_post = []
+        
+        for boq in boqs_to_revise:
+            base_name = re.sub(r' \(v\d+\)$', '', boq.name)
+            history_name = f"{base_name} (v{boq.version})"
+            
+            history_boq = boq.with_context(revision_copy=True, mail_create_nosubscribe=True).copy({
+                'name': history_name,
+                'active': False,
+                'state': 'locked',
+                'version': boq.version,
+                'previous_boq_id': boq.previous_boq_id.id,
+            })
+            revision_vals_list.append({
+                'original_boq_id': history_boq.id,
+                'new_boq_id': boq.id,
+                'revision_reason': "Auto-revision due to modification.",
+                'approved_by': boq.approved_by.id,
+                'approval_date': boq.approval_date,
+            })
+            new_version = boq.version + 1
+            new_name = f"{base_name} (v{new_version})"
+            
+            boq_update_vals[boq.id] = {
+                'version': new_version,
+                'name': new_name,
+                'previous_boq_id': history_boq.id,
+                'state': 'draft',
+                'approval_date': False,
+                'approved_by': False,
+            }
+            
+            messages_to_post.append((boq, f"Content modified. Archived v{new_version-1} and upgraded to v{new_version}."))
+        
+        if revision_vals_list:
+            self.env['construction.boq.revision'].create(revision_vals_list)
+        
+        for boq_id, vals in boq_update_vals.items():
+            super(ConstructionBOQ, self.browse(boq_id)).write(vals)
+        
+        for boq, body in messages_to_post:
+            boq.message_post(body=body)
+
+    def write(self, vals):
+        if self.env.context.get('revision_copy'):
+            return super(ConstructionBOQ, self).write(vals)
+        
+        ignore_fields = [
+            'message_follower_ids', 'state', 'approval_date', 'approved_by',
+            'active', 'total_budget', 'previous_boq_id', 'revision_ids',
+            'display_revision_ids', 'write_date', 'write_uid', 'name'
+        ]
+        
+        has_business_changes = any(f not in ignore_fields for f in vals)
+        if has_business_changes:
+            boqs_to_revise = self.filtered(
+                lambda b: b.state in ['submitted', 'approved', 'locked']
+            )
+            if boqs_to_revise:
+                boqs_to_revise.create_revision_snapshot()
+        return super(ConstructionBOQ, self).write(vals)
+
+    # -------------------------------------------------------------------------
+    # CONSTRAINTS
+    # -------------------------------------------------------------------------
+    @api.constrains('state')
+    def _check_boq_before_approval(self):
+        boqs_to_check = self.filtered(lambda b: b.state == 'approved')
+        if not boqs_to_check:
+            return
+            
+        boqs_without_lines = boqs_to_check.filtered(lambda b: not b.boq_line_ids)
+        if boqs_without_lines:
+            raise ValidationError(_('BOQ cannot be approved without BOQ lines.'))
+
+    @api.constrains('project_id', 'version', 'active')
+    def _check_unique_active_version(self):
+        active_boqs = self.filtered('active')
+        if not active_boqs:
+            return
+            
+        project_version_pairs = [
+            (boq.project_id.id, boq.version)
+            for boq in active_boqs
+        ]
+        
+        for project_id, version in project_version_pairs:
+            duplicate_count = self.search_count([
+                ('project_id', '=', project_id),
+                ('version', '=', version),
+                ('active', '=', True),
+                ('id', 'in', active_boqs.ids)
+            ])
+            if duplicate_count > 1:
+                raise ValidationError(_('An active BOQ with this version already exists for this project.'))
+
+    def _check_one_active_boq(self):
+        if not self:
+            return
+            
+        project_ids = self.mapped('project_id').ids
+        if not project_ids:
+            return
+            
+        existing_boqs = self.search([
+            ('project_id', 'in', project_ids),
+            ('state', 'in', ['approved', 'locked']),
+            ('id', 'not in', self.ids),
+            ('active', '=', True)
+        ])
+        
+        if existing_boqs:
+            project_names = existing_boqs.mapped('project_id.name')
+            raise ValidationError(
+                _('There is already an active (Approved or Locked) BOQ for project(s): %s. Please revise the existing one.') %
+                ', '.join(project_names)
+            )
+
+class ConstructionBOQLine(models.Model):
+    _name = 'construction.boq.line'
+    _description = 'BOQ Line Item'
+    _order = 'sequence, id'
+    
+    _inherit = ['analytic.mixin'] 
+
+    # Basic Information
+    boq_id = fields.Many2one('construction.boq', string='BOQ Reference', required=True, ondelete='cascade', index=True)
+    display_type = fields.Selection([
+        ('line_section', 'Section'),
+        ('line_note', 'Note')
+    ], default=False, help="Technical field for UX purpose.")
+    
+    section_id = fields.Many2one('construction.boq.section', string='Section')
+
+    # Product Information
+    product_id = fields.Many2one('product.product', string='Product',
+        domain="[('company_id', 'in', (company_id, False))]")
+    
+    # Main Fields
+    name = fields.Char(string='Description', required=True, compute='_compute_name', store=True, readonly=False)
+    
+    # [FIX] Removed required=True from these fields. They are enforced via python constraint only for non-section lines.
+    quantity = fields.Float(string='Budget Qty', default=1.0)
+    estimated_rate = fields.Monetary(string='Budget Rate', currency_field='currency_id', default=0.0)
+    uom_id = fields.Many2one('uom.uom', string='Unit of Measure')
+    
+    budget_amount = fields.Monetary(string='Budget Amount', compute='_compute_budget_amount', currency_field='currency_id', store=True)
+    remaining_amount = fields.Monetary(string='Available Budget', compute='_compute_consumption', currency_field='currency_id', store=True)
+    
+    # Technical Fields
+    description = fields.Text(string='Long Description')
+    cost_type = fields.Selection([
+        ('material', 'Material'),
+        ('labor', 'Labor'),
+        ('subcontract', 'Subcontract'),
+        ('service', 'Service'),
+        ('overhead', 'Overhead')
+    ], string='Cost Type', default='material', help="Classifies the type of cost for reporting and analysis.")
+    
+    task_id = fields.Many2one('project.task', string='Task', domain="[('project_id', '=', parent.project_id)]")
+    activity_code = fields.Char(string='Activity Code', help="Code used to link this BOQ line to a specific project task or schedule activity.")
+    
+    company_id = fields.Many2one('res.company', related='boq_id.company_id', string='Company', store=True, readonly=True)
+    
+    currency_id = fields.Many2one('res.currency', related='company_id.currency_id', string='Currency', readonly=True, store=True)
+    
+    sequence = fields.Integer(string='Sequence', default=10)
+    
+    # Accounting Fields
+    expense_account_id = fields.Many2one('account.account', string='Expense Account', check_company=True)
+    analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
+    
+    analytic_distribution = fields.Json(string='Analytic Distribution', help="Distribute costs across multiple analytic accounts.")
+    
+    # Consumption Tracking
+    consumed_quantity = fields.Float(string='Consumed Qty', compute='_compute_consumption', store=True)
+    consumed_amount = fields.Monetary(string='Consumed Amount', compute='_compute_consumption', currency_field='currency_id', store=True)
+    remaining_quantity = fields.Float(string='Remaining Qty', compute='_compute_consumption', store=True)
+    
+    allow_over_consumption = fields.Boolean(string='Allow Over Consumption', default=False, help="If checked, allows consumption to exceed the budgeted quantity/amount without error.")
+    consumption_ids = fields.One2many('construction.boq.consumption', 'boq_line_id', string='Consumptions')
+    consumption_percentage = fields.Float(string='Progress', compute='_compute_consumption_percentage', store=False, help="Percentage of budget consumed.")
+    
+    # Product Configuration Validation
+    product_config_valid = fields.Boolean(string='Product Configured', compute='_compute_product_config_valid', store=False)
+
+    # [FIX] New Constraint to ensure data integrity for actual lines vs sections
+    @api.constrains('display_type', 'product_id', 'uom_id', 'quantity')
+    def _check_line_requirements(self):
+        for rec in self:
+            if not rec.display_type:
+                # If it's a real line (not a section/note)
+                if not rec.product_id:
+                     raise ValidationError(_('Product is mandatory for BOQ lines that are not Sections/Notes.'))
+                if not rec.uom_id:
+                     raise ValidationError(_('Unit of Measure is mandatory for BOQ line: %s') % rec.name)
+                if rec.quantity <= 0:
+                     raise ValidationError(_('Quantity must be positive for BOQ line: %s') % rec.name)
+
+    @api.depends('product_id', 'section_id')
+    def _compute_name(self):
+        """Auto-fill name from product or section"""
+        for rec in self:
+            if rec.display_type == 'line_section' and rec.section_id:
+                rec.name = rec.section_id.name
+            elif rec.product_id and not rec.name:
+                rec.name = rec.product_id.name
+
+    @api.depends('product_id')
+    def _compute_product_config_valid(self):
+        for rec in self:
+            if not rec.product_id:
+                rec.product_config_valid = False
+                continue
+                
+            valid = True
+            if not rec.product_id.uom_id:
+                valid = False
+            if not rec.product_id.standard_price:
+                valid = False
+            if not rec.product_id.property_account_expense_id and not rec.product_id.categ_id.property_account_expense_categ_id:
+                valid = False
+                
+            rec.product_config_valid = valid
+
+    @api.depends('quantity', 'estimated_rate')
+    def _compute_budget_amount(self):
+        for rec in self:
+            rec.budget_amount = rec.quantity * rec.estimated_rate
+
+    @api.depends('quantity', 'budget_amount', 'consumption_ids.quantity', 'consumption_ids.amount')
+    def _compute_consumption(self):
+        for rec in self:
+            # [FIX] Sections/Notes have no consumption
+            if rec.display_type:
+                rec.consumed_quantity = 0.0
+                rec.consumed_amount = 0.0
+                rec.remaining_quantity = 0.0
+                rec.remaining_amount = 0.0
+                continue
+
+            rec.consumed_quantity = 0.0
+            rec.consumed_amount = 0.0
+            rec.remaining_quantity = rec.quantity
+            rec.remaining_amount = rec.budget_amount
+        
+        # Filter out sections and new records from batch calculation
+        new_records = self.filtered(lambda r: not isinstance(r.id, int))
+        real_records = self.filtered(lambda r: isinstance(r.id, int) and not r.display_type)
+        
+        for rec in new_records:
+            if not rec.display_type and rec.consumption_ids:
+                c_qty = sum(rec.consumption_ids.mapped('quantity'))
+                c_amt = sum(rec.consumption_ids.mapped('amount'))
+                rec.consumed_quantity = c_qty
+                rec.consumed_amount = c_amt
+                rec.remaining_quantity = rec.quantity - c_qty
+                rec.remaining_amount = rec.budget_amount - c_amt
+        
+        if real_records:
+            data = self.env['construction.boq.consumption'].read_group(
+                [('boq_line_id', 'in', real_records.ids)],
+                ['boq_line_id', 'quantity', 'amount'],
+                ['boq_line_id']
+            )
+            
+            data_map = {d['boq_line_id'][0]: d for d in data}
+            
+            for rec in real_records:
+                group = data_map.get(rec.id)
+                if group:
+                    c_qty = group['quantity']
+                    c_amt = group['amount']
+                    rec.consumed_quantity = c_qty
+                    rec.consumed_amount = c_amt
+                    rec.remaining_quantity = rec.quantity - c_qty
+                    rec.remaining_amount = rec.budget_amount - c_amt
+
+    @api.depends('consumed_amount', 'budget_amount')
+    def _compute_consumption_percentage(self):
+        for rec in self:
+            if rec.budget_amount > 0:
+                rec.consumption_percentage = (rec.consumed_amount / rec.budget_amount)
+            else:
+                rec.consumption_percentage = 0.0
+
+    @api.onchange('product_id')
+    def _onchange_product_id(self):
+        if self.product_id:
+            self.name = self.product_id.name
+            self.description = self.product_id.description_sale or self.product_id.name
+            self.uom_id = self.product_id.uom_id
+            self.estimated_rate = self.product_id.standard_price
+            
+            account = self.product_id.property_account_expense_id or self.product_id.categ_id.property_account_expense_categ_id
+            if account:
+                self.expense_account_id = account
+            
+            if not self.product_id.uom_id:
+                return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Unit of Measure defined.') % self.product_id.name}}
+            
+            if not self.product_id.standard_price:
+                return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Standard Price defined.') % self.product_id.name}}
+            
+            if not self.product_id.property_account_expense_id and not self.product_id.categ_id.property_account_expense_categ_id:
+                return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Expense Account defined.') % self.product_id.name}}
+
+    @api.onchange('section_id')
+    def _onchange_section_id(self):
+        if self.section_id:
+            self.name = self.section_id.name
+
+    @api.onchange('task_id')
+    def _onchange_task_id(self):
+        if self.task_id and self.task_id.activity_code:
+            self.activity_code = self.task_id.activity_code
+
+    @api.constrains('product_id')
+    def _check_product_configuration(self):
+        for rec in self.filtered(lambda r: r.product_id and r.display_type is False):
+            if not rec.product_id.uom_id:
+                raise ValidationError(_('Product "%s" is not properly configured. Unit of Measure is missing.') % rec.product_id.name)
+            if not rec.product_id.standard_price:
+                raise ValidationError(_('Product "%s" is not properly configured. Standard Price is missing.') % rec.product_id.name)
+            if not rec.expense_account_id:
+                raise ValidationError(_('Product "%s" is not properly configured. Expense Account is missing.') % rec.product_id.name)
+
+    def check_consumption(self, qty, amount):
+        self.ensure_one()
+        # [FIX] Bypass consumption check for sections/notes
+        if self.display_type:
+            return
+
+        if not self.allow_over_consumption:
+            if qty > self.remaining_quantity + 0.0001:
+                 raise ValidationError(_('BOQ Quantity Exceeded for %s.') % self.name)
+            if amount > self.remaining_amount + 0.01:
+                 raise ValidationError(_('BOQ Budget Exceeded for %s.') % self.name)
+
+    # -------------------------------------------------------------------------
+    # PROPAGATE VERSIONING FROM LINE CHANGES
+    # -------------------------------------------------------------------------
+    @api.model_create_multi
+    def create(self, vals_list):
+        boq_ids = {vals['boq_id'] for vals in vals_list if vals.get('boq_id')}
+        if boq_ids and not self.env.context.get('revision_copy'):
+            boqs = self.env['construction.boq'].browse(list(boq_ids))
+            boqs.filtered(lambda b: b.state in ['submitted', 'approved', 'locked']).create_revision_snapshot()
+        return super(ConstructionBOQLine, self).create(vals_list)
+
+    def write(self, vals):
+        if not self.env.context.get('revision_copy'):
+            boqs = self.mapped('boq_id')
+            boqs.filtered(lambda b: b.state in ['submitted', 'approved', 'locked']).create_revision_snapshot()
+        return super(ConstructionBOQLine, self).write(vals)
+
+    def unlink(self):
+        if not self.env.context.get('revision_copy'):
+            boqs = self.mapped('boq_id')
+            boqs.filtered(lambda b: b.state in ['submitted', 'approved', 'locked']).create_revision_snapshot()
+        return super(ConstructionBOQLine, self).unlink()
+
+    def action_open_advanced_view(self):
+        self.ensure_one()
+        return {
+            'name': _('Advanced BOQ Line'),
+            'type': 'ir.actions.act_window',
+            'res_model': 'construction.boq.line',
+            'view_mode': 'form',
+            'res_id': self.id,
+            'views': [(False, 'form')],
+            'target': 'new',
+            'context': {'form_view_ref': 'entrpryz_construction_boq.view_construction_boq_line_advanced_form'}
+        }
+
+    class ConstructionBOQConsumption(models.Model):
+        _name = 'construction.boq.consumption'
+        _description = 'BOQ Consumption Ledger'
+        _order = 'date desc, id desc'
+    
+        boq_line_id = fields.Many2one('construction.boq.line', string='BOQ Line', required=True, ondelete='restrict', index=True)
+        company_id = fields.Many2one('res.company', related='boq_line_id.company_id', string='Company', store=True, readonly=True)
+        
+        source_model = fields.Char(string='Source Model', required=True)
+        source_id = fields.Integer(string='Source ID', required=True)
+        
+        quantity = fields.Float(string='Quantity Consumed')
+        amount = fields.Monetary(string='Amount Consumed', currency_field='currency_id')
+        currency_id = fields.Many2one('res.currency', related='boq_line_id.currency_id', store=True)
+        
+        date = fields.Date(string='Date', default=fields.Date.context_today, required=True)
+        user_id = fields.Many2one('res.users', string='User', default=lambda self: self.env.user)
+    
+        @api.model_create_multi
+        def create(self, vals_list):
+            line_ids = {vals['boq_line_id'] for vals in vals_list if vals.get('boq_line_id')}
+            lines = self.env['construction.boq.line'].browse(list(line_ids))
+            line_map = {line.id: line for line in lines}
+            
+            for vals in vals_list:
+                line_id = vals.get('boq_line_id')
+                if line_id and line_id in line_map:
+                    line = line_map[line_id]
+                    # [FIX] Do not process consumption for Sections
+                    if line.display_type:
+                         raise ValidationError(_("Cannot record consumption on a Section/Note BOQ line."))
+
+                    qty = vals.get('quantity', 0.0)
+                    amt = vals.get('amount', 0.0)
+                    if qty > 0 or amt > 0:
+                        line.check_consumption(qty, amt)
+            return super(ConstructionBOQConsumption, self).create(vals_list)
+    
+        def init(self):
+            self.env.cr.execute("""
+                REVOKE UPDATE, DELETE ON construction_boq_consumption FROM PUBLIC;
+            """)
+========== ./models/boq_report.py ==========
+# -*- coding: utf-8 -*-
+from odoo import models, fields, tools
+class ConstructionBOQReport(models.Model):
+    _name = 'construction.boq.report'
+    _description = 'BOQ Budget vs Actual Analysis'
+    _auto = False
+    _rec_name = 'boq_line_id'
+    _order = 'project_id, boq_id'
+    # Dimensions
+    boq_line_id = fields.Many2one('construction.boq.line', string='BOQ Line', readonly=True)
+    boq_id = fields.Many2one('construction.boq', string='BOQ Reference', readonly=True)
+    project_id = fields.Many2one('project.project', string='Project', readonly=True)
+    company_id = fields.Many2one('res.company', string='Company', readonly=True)
+    analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', readonly=True)
+    product_id = fields.Many2one('product.product', string='Product', readonly=True)
+    cost_type = fields.Selection([
+        ('material', 'Material'),
+        ('labor', 'Labor'),
+        ('subcontract', 'Subcontract'),
+        ('service', 'Service'),
+        ('overhead', 'Overhead')
+    ], string='Cost Type', readonly=True)
+   
+    # Measures: Budget
+    budget_quantity = fields.Float(string='Budget Qty', readonly=True)
+    budget_amount = fields.Monetary(string='Budget Amount', readonly=True)
+   
+    # Measures: Actuals (Aggregated from Consumption Ledger)
+    consumed_quantity = fields.Float(string='Actual Qty', readonly=True)
+    consumed_amount = fields.Monetary(string='Actual Amount', readonly=True)
+   
+    # Measures: Variances (Calculated in SQL)
+    variance_quantity = fields.Float(string='Variance Qty', readonly=True, help="Budget Qty - Actual Qty")
+    variance_amount = fields.Monetary(string='Variance Amount', readonly=True, help="Budget Amount - Actual Amount")
+   
+    # Measures: Percentage (Optional utility for graph views)
+    consumption_progress = fields.Float(string='Consumption %', readonly=True, group_operator="avg")
+    currency_id = fields.Many2one('res.currency', string='Currency', readonly=True)
+    def init(self):
+        tools.drop_view_if_exists(self.env.cr, self._table)
+       
+        # Use parameterized query for safety and performance
+        query = """
+            CREATE OR REPLACE VIEW %s AS (
+                SELECT
+                    -- Use row_number() to ensure unique IDs for view records
+                    ROW_NUMBER() OVER (ORDER BY l.id) AS id,
+                    l.id AS boq_line_id,
+                    l.boq_id,
+                    b.project_id,
+                    b.company_id,
+                    l.analytic_account_id,
+                    l.product_id,
+                    l.cost_type,
+                    l.currency_id,
+                   
+                    -- Budget Columns
+                    l.quantity AS budget_quantity,
+                    l.budget_amount AS budget_amount,
+                   
+                    -- Actual Columns (Aggregated from Ledger)
+                    COALESCE(cons.sum_qty, 0.0) AS consumed_quantity,
+                    COALESCE(cons.sum_amt, 0.0) AS consumed_amount,
+                   
+                    -- Variance Calculations
+                    (l.quantity - COALESCE(cons.sum_qty, 0.0)) AS variance_quantity,
+                    (l.budget_amount - COALESCE(cons.sum_amt, 0.0)) AS variance_amount,
+                   
+                    -- Progress Calculation (Avoid division by zero)
+                    CASE
+                        WHEN l.budget_amount > 0
+                        THEN (COALESCE(cons.sum_amt, 0.0) / l.budget_amount) * 100
+                        ELSE 0
+                    END AS consumption_progress
+                   
+                FROM construction_boq_line l
+                INNER JOIN construction_boq b ON b.id = l.boq_id
+               
+                -- Use LATERAL JOIN for better performance with correlated subqueries
+                LEFT JOIN LATERAL (
+                    SELECT
+                        c.boq_line_id,
+                        SUM(c.quantity) as sum_qty,
+                        SUM(c.amount) as sum_amt
+                    FROM construction_boq_consumption c
+                    WHERE c.boq_line_id = l.id
+                    GROUP BY c.boq_line_id
+                ) cons ON TRUE
+               
+                WHERE b.state IN ('approved', 'locked', 'closed')
+                AND b.active = True -- Use b.active (BOQ header) instead of l.active
+            )
+        """ % self._table
+       
+        self.env.cr.execute(query)
+       
+        # Create indexes on frequently filtered columns for better query performance
+        self._create_indexes()
+   
+    def _create_indexes(self):
+        """Create database indexes for optimal query performance"""
+        indexes = [
+            'construction_boq_line_boq_id_idx',
+            'construction_boq_project_id_idx',
+            'construction_boq_state_idx',
+            'construction_boq_consumption_boq_line_id_idx'
+        ]
+       
+        for index in indexes:
+            self.env.cr.execute("""
+                DROP INDEX IF EXISTS %s
+            """ % index)
+       
+        # Create indexes for better join performance
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS construction_boq_line_boq_id_idx
+            ON construction_boq_line(boq_id)
+        """)
+       
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS construction_boq_project_id_idx
+            ON construction_boq(project_id)
+        """)
+       
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS construction_boq_state_idx
+            ON construction_boq(state)
+        """)
+       
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS construction_boq_consumption_boq_line_id_idx
+            ON construction_boq_consumption(boq_line_id)
+        """)
+========== ./models/boq_revision.py ==========
+# models/boq_revision.py
+# -*- coding: utf-8 -*-
+from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError
+
+class ConstructionBOQRevision(models.Model):
+    _name = 'construction.boq.revision'
+    _description = 'BOQ Revision History'
+    _order = 'create_date desc'
+    _rec_name = 'display_name'
+    
+    # Performance Optimization: Added indexes for frequently searched fields
+    original_boq_id = fields.Many2one(
+        'construction.boq',
+        string='Original BOQ (Snapshot)',
+        required=True,
+        readonly=True,
+        ondelete='restrict',
+        index=True, # Added index for faster searches
+        help="Reference to the original BOQ snapshot"
+    )
+   
+    new_boq_id = fields.Many2one(
+        'construction.boq',
+        string='New BOQ (Current)',
+        required=True,
+        readonly=True,
+        ondelete='cascade',
+        index=True, # Added index for faster searches
+        help="Reference to the current BOQ after revision"
+    )
+   
+    revision_reason = fields.Text(
+        string='Reason for Revision',
+        required=True,
+        help="Detailed explanation for the BOQ revision"
+    )
+   
+    approved_by = fields.Many2one(
+        'res.users',
+        string='Approved By',
+        readonly=True,
+        index=True, # Added index for user-based filtering
+        help="User who approved this revision"
+    )
+   
+    approval_date = fields.Date(
+        string='Approval Date',
+        readonly=True,
+        help="Date when the revision was approved"
+    )
+   
+    # Performance Optimization: Computed field for better UI performance
+    display_name = fields.Char(
+        string='Revision Reference',
+        compute='_compute_display_name',
+        store=True, # Stored for faster searches
+        index=True, # Indexed for better search performance
+    )
+   
+    # Performance Optimization: Related fields to avoid extra queries
+    original_boq_name = fields.Char(
+        related='original_boq_id.name',
+        string='Original BOQ Name',
+        store=True, # Stored to avoid N+1 query problem
+        readonly=True,
+        help="Name of the original BOQ"
+    )
+   
+    new_boq_name = fields.Char(
+        related='new_boq_id.name',
+        string='New BOQ Name',
+        store=True, # Stored to avoid N+1 query problem
+        readonly=True,
+        help="Name of the new BOQ"
+    )
+   
+    # Performance Optimization: Track status for filtering
+    state = fields.Selection(
+        related='new_boq_id.state',
+        string='BOQ State',
+        store=True, # Stored for faster filtering
+        readonly=True,
+        help="Current state of the BOQ"
+    )
+   
+    # Performance Optimization: Indexed date fields for range queries
+    create_date = fields.Datetime(
+        string='Created On',
+        readonly=True,
+        index=True, # Indexed for faster date-based filtering
+    )
+   
+    # Performance Optimization: Archive instead of delete for historical data
+    active = fields.Boolean(
+        string='Active',
+        default=True,
+        help="If unchecked, it will allow you to hide the revision without removing it."
+    )
+   
+    # Performance Optimization: SQL constraints for data integrity
+    _sql_constraints = [
+        ('unique_revision_pair',
+         'UNIQUE(original_boq_id, new_boq_id)',
+         'A revision record already exists for this BOQ pair.'),
+    ]
+    
+    @api.depends('original_boq_id', 'new_boq_id', 'create_date')
+    def _compute_display_name(self):
+        """Compute display name for better UI performance"""
+        for revision in self:
+            if revision.original_boq_id and revision.new_boq_id:
+                revision.display_name = f"Revision: {revision.original_boq_id.name} → {revision.new_boq_id.name}"
+            else:
+                revision.display_name = f"Revision {revision.id}"
+    
+    @api.constrains('original_boq_id', 'new_boq_id')
+    def _check_boq_relationship(self):
+        """Validate BOQ relationship to prevent circular revisions"""
+        for revision in self:
+            if revision.original_boq_id == revision.new_boq_id:
+                raise ValidationError(_('Original BOQ and New BOQ cannot be the same.'))
+           
+            # Check if new_boq_id is already an original in another revision
+            # This prevents creating revision chains that are too long
+            existing_revision = self.search([
+                ('original_boq_id', '=', revision.new_boq_id.id)
+            ], limit=1)
+           
+            if existing_revision and existing_revision.id != revision.id:
+                raise ValidationError(
+                    _('This BOQ is already an original in another revision. '
+                      'Please update the existing revision instead.')
+                )
+    
+    def name_get(self):
+        """Optimized name_get to avoid multiple queries"""
+        # Use prefetching for better performance
+        self.mapped('original_boq_id.name')
+        self.mapped('new_boq_id.name')
+       
+        return [(record.id, record.display_name) for record in self]
+    
+    # FIXED: Updated _search method for Odoo 18 compatibility
+    @api.model
+    def _search(self, args, offset=0, limit=None, order=None):
+        """Optimize search queries with proper indexing"""
+        # Add default ordering if not specified
+        if not order:
+            order = self._order
+       
+        # FIXED: Call super without count parameter (Odoo 18 compatibility)
+        return super(ConstructionBOQRevision, self)._search(
+            args, offset=offset, limit=limit, order=order
+        )
+    
+    # Performance Optimization: Batch methods for better ORM usage
+    def get_related_boqs(self):
+        """Get all related BOQs in a single query"""
+        boq_ids = self.mapped('original_boq_id') + self.mapped('new_boq_id')
+        return boq_ids
+    
+    # Performance Optimization: Add security rules for better access control
+    @api.model
+    def _get_default_team(self):
+        """Get default construction team for access control"""
+        # This would typically be implemented based on your business logic
+        return self.env['construction.team'].search([], limit=1)
+    
+    def action_archive(self):
+        """Archive revision instead of deleting"""
+        self.write({'active': False})
+        return True
+    
+    def action_unarchive(self):
+        """Unarchive revision"""
+        self.write({'active': True})
+        return True
+========== ./models/boq_section.py ==========
+# -*- coding: utf-8 -*-
+from odoo import models, fields
+
+class ConstructionBOQSection(models.Model):
+    _name = 'construction.boq.section'
+    _description = 'Global BOQ Section'
+    _order = 'sequence, id'
+
+    name = fields.Char(string='Section Name', required=True, translate=True)
+    code = fields.Char(string='Code')
+    description = fields.Text(string='Description')
+    sequence = fields.Integer(string='Sequence', default=10)
+    active = fields.Boolean(default=True)
+
+    _sql_constraints = [
+        ('name_uniq', 'unique (name)', 'The section name must be unique!')
+    ]
+========== ./models/__init__.py ==========
+# -*- coding: utf-8 -*-
+from . import boq_section
+from . import boq
+from . import boq_revision
+from . import purchase
+from . import stock
+from . import account_move
+from . import boq_report
+from . import project_task
+========== ./models/project_task.py ==========
+# -*- coding: utf-8 -*-
+from odoo import models, fields, api
+from odoo.exceptions import ValidationError
+
+
+class ProjectTask(models.Model):
+    _inherit = 'project.task'
+
+    activity_code = fields.Char(
+        string='Activity Code',
+        help="Code used to link with BOQ lines for cost control.",
+        index=True,  # Added index for faster searches/filtering
+        copy=False  # Prevent copying when duplicating tasks
+    )
+
+    _sql_constraints = [
+        ('uniq_activity_code_project', 
+         'UNIQUE(project_id, activity_code)', 
+         'Activity Code must be unique per project.')
+    ]
+
+    @api.constrains('activity_code', 'project_id')
+    def _check_activity_code_uniqueness(self):
+        """Additional Python constraint for better validation messages and bulk operations."""
+        for task in self:
+            if task.activity_code:
+                # Only check if activity_code is not empty
+                existing = self.search([
+                    ('project_id', '=', task.project_id.id),
+                    ('activity_code', '=', task.activity_code),
+                    ('id', '!=', task.id)
+                ], limit=1)
+                if existing:
+                    raise ValidationError(
+                        f"Activity Code '{task.activity_code}' already exists for this project."
+                    )
+
+    @api.model
+    def create(self, vals_list):
+        """Optimize create for bulk operations."""
+        # If activity_code is provided, ensure proper formatting
+        if isinstance(vals_list, dict):
+            vals_list = [vals_list]
+        
+        for vals in vals_list:
+            if 'activity_code' in vals and vals.get('activity_code'):
+                vals['activity_code'] = vals['activity_code'].strip().upper()
+        
+        return super().create(vals_list)
+
+    def write(self, vals):
+        """Optimize write for bulk operations."""
+        if 'activity_code' in vals and vals.get('activity_code'):
+            vals['activity_code'] = vals['activity_code'].strip().upper()
+        return super().write(vals)
+
+    def copy(self, default=None):
+        """Prevent copying activity_code by default to avoid constraint violations."""
+        if default is None:
+            default = {}
+        # Ensure activity_code is not copied unless explicitly specified
+        if 'activity_code' not in default:
+            default['activity_code'] = False
+        return super().copy(default)
+
+    @api.model
+    def _name_search(self, name='', args=None, operator='ilike', limit=100, name_get_uid=None):
+        """Optimize search for activity_code."""
+        if args is None:
+            args = []
+        
+        # If searching by code prefix (common pattern), optimize the query
+        if operator in ('=', 'ilike', 'like') and name:
+            # Try to match by activity_code first as it's likely more specific
+            tasks = self.search(
+                args + [('activity_code', operator, name)], 
+                limit=limit
+            )
+            if tasks:
+                return tasks.ids
+        
+        return super()._name_search(name, args, operator, limit, name_get_uid)
+========== ./models/purchase.py ==========
+# -*- coding: utf-8 -*-
+from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError
+from collections import defaultdict
+
+
+class PurchaseOrder(models.Model):
+    _inherit = 'purchase.order'
+
+    # Task 8.1: Add purchase mode and BOQ selection
+    purchase_type = fields.Selection([
+        ('normal', 'Normal Purchase'),
+        ('boq', 'BOQ Purchase')
+    ], string='Purchase Mode', default='normal', required=True,
+       help="Select 'BOQ Purchase' to enforce budget controls.")
+
+    project_id = fields.Many2one('project.project', string='Project')
+    
+    boq_id = fields.Many2one(
+        'construction.boq', 
+        string='BOQ Reference', 
+        domain="[('project_id', '=', project_id), ('state', 'in', ['approved', 'locked'])]"
+    )
+
+    @api.onchange('purchase_type')
+    def _onchange_purchase_type(self):
+        """Clear fields if switching back to normal"""
+        if self.purchase_type == 'normal':
+            self.project_id = False
+            self.boq_id = False
+
+
+class PurchaseOrderLine(models.Model):
+    _inherit = 'purchase.order.line'
+
+    # Task 8.3: Update boq_line_id domain to filter by the specific Header BOQ
+    boq_line_id = fields.Many2one(
+        'construction.boq.line',
+        string='BOQ Item',
+        index=True,
+        # [FIX] Added display_type = False to domain
+        domain="[('boq_id', '=', parent.boq_id), ('boq_id.state', 'in', ('approved', 'locked')), ('display_type', '=', False)]"
+    )
+
+    @api.onchange('boq_line_id')
+    def _onchange_boq_line_id(self):
+        # Use mapping to avoid multiple if checks
+        field_mapping = {
+            'product_id': 'product_id',
+            'product_uom': 'uom_id',
+            'analytic_distribution': 'analytic_distribution'
+        }
+        
+        if self.boq_line_id:
+            for line_field, boq_field in field_mapping.items():
+                boq_value = getattr(self.boq_line_id, boq_field, False)
+                if boq_value and not getattr(self, line_field, False):
+                    setattr(self, line_field, boq_value)
+
+    @api.constrains('product_qty', 'boq_line_id', 'order_id')
+    def _check_boq_limit(self):
+        """Optimized constraint method with bulk operations"""
+        
+        # Separate lines by purchase type and state for efficient processing
+        boq_lines = self.filtered(
+            lambda l: l.order_id.purchase_type == 'boq' and 
+                      l.state in ('draft', 'sent') and 
+                      l.boq_line_id
+        )
+        
+        normal_lines = self.filtered(
+            lambda l: l.order_id.purchase_type == 'boq' and 
+                      not l.boq_line_id
+        )
+        
+        # Check for lines without BOQ in BOQ purchase mode
+        if normal_lines:
+            raise ValidationError(
+                _('For BOQ Purchases, every line must be linked to a BOQ Item.')
+            )
+        
+        # Bulk fetch all related BOQ lines with their data
+        if boq_lines:
+            boq_line_ids = boq_lines.mapped('boq_line_id.id')
+            
+            # Use read_group to fetch remaining quantities in bulk
+            boq_data = self.env['construction.boq.line'].search_read(
+                [('id', 'in', boq_line_ids)],
+                ['id', 'remaining_quantity', 'allow_over_consumption', 
+                 'name', 'boq_id', 'boq_id.project_id']
+            )
+            
+            # Create lookup dictionaries for O(1) access
+            boq_by_id = {data['id']: data for data in boq_data}
+            
+            # Group lines by boq_line_id for efficient processing
+            lines_by_boq = defaultdict(list)
+            for line in boq_lines:
+                lines_by_boq[line.boq_line_id.id].append(line)
+            
+            # Check project alignment and quantity limits
+            for boq_line_id, lines in lines_by_boq.items():
+                boq_info = boq_by_id.get(boq_line_id)
+                if not boq_info:
+                    continue
+                
+                # Check project alignment for all lines at once
+                project_mismatch_lines = [
+                    line for line in lines 
+                    if (line.order_id.project_id and 
+                        boq_info['boq_id'][0] != line.order_id.project_id.id)
+                ]
+                
+                if project_mismatch_lines:
+                    raise ValidationError(
+                        _('The BOQ Line selected does not belong to the Project on the Purchase Order.')
+                    )
+                
+                # Check quantity limits for lines where over-consumption is not allowed
+                if not boq_info['allow_over_consumption']:
+                    remaining_qty = boq_info['remaining_quantity']
+                    
+                    # Check each line's quantity against the same remaining quantity
+                    for line in lines:
+                        if line.product_qty > remaining_qty:
+                            raise ValidationError(
+                                _('Purchase Quantity (%s) exceeds BOQ Remaining Quantity (%s) for item %s.') % (
+                                    line.product_qty,
+                                    remaining_qty,
+                                    boq_info['name']
+                                )
+                            )
+========== ./models/stock.py ==========
+# -*- coding: utf-8 -*-
+from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError
+
+
+class StockMove(models.Model):
+    _inherit = 'stock.move'
+
+    # Link this move to a BOQ line for budget tracking.
+    boq_line_id = fields.Many2one(
+        'construction.boq.line',
+        string='BOQ Line',
+        index=True,
+        # [FIX] Added display_type = False to domain
+        domain="[('boq_id.state', 'in', ('approved', 'locked')), ('display_type', '=', False)]",
+        help="Link this move to a BOQ line for budget tracking."
+    )
+
+    # ---------------------------------------------------------
+    # Constraints & Validations
+    # ---------------------------------------------------------
+
+    @api.constrains('boq_line_id', 'product_id')
+    def _check_boq_product_match(self):
+        """
+        Verify stock move product matches the BOQ line product.
+        """
+        # Use filtered instead of looping to identify invalid records
+        invalid_moves = self.filtered(
+            lambda m: m.boq_line_id and m.boq_line_id.product_id != m.product_id
+        )
+        
+        if invalid_moves:
+            # Raise a single error for all invalid moves
+            move_info = [
+                _("%s (move product) vs %s (BOQ product)") % 
+                (m.product_id.name, m.boq_line_id.product_id.name)
+                for m in invalid_moves
+            ]
+            raise ValidationError(
+                _("Product mismatch in stock moves:\n%s") % 
+                "\n".join(move_info)
+            )
+
+    # ---------------------------------------------------------
+    # Subtask 1.2: Override Accounting Valuation
+    # ---------------------------------------------------------
+
+    def _get_dest_account(self, accounts_data):
+        """
+        Override the destination account for stock valuation.
+        Valuation posted to BOQ expense account.
+        
+        If this move is linked to a BOQ Line and is being issued out (Customer/Production),
+        we override the default Category Expense Account with the BOQ Line's Expense Account.
+        """
+        # Standard Odoo/Cybrosys logic to get the default account
+        destination_account_id = super()._get_dest_account(accounts_data)
+
+        # Custom Logic: If BOQ Line exists, use its expense account
+        if self.boq_line_id and self.location_dest_id.usage in ('customer', 'production'):
+            if not self.boq_line_id.expense_account_id:
+                raise ValidationError(
+                    _("The linked BOQ Line %s has no Expense Account configured.") % 
+                    self.boq_line_id.name
+                )
+            return self.boq_line_id.expense_account_id.id
+            
+        return destination_account_id
+
+    def _prepare_account_move_line(self, qty, cost, credit_account_id, debit_account_id, description):
+        """
+        Inject analytic distribution from BOQ Line into the Stock Journal Entry.
+        This ensures that when a stock move is posted, the resulting Journal Entry carries 
+        the Project/Analytic Account defined in the BOQ.
+        """
+        self.ensure_one()
+        # Call super to get the list of move line values [(0, 0, vals), (0, 0, vals)]
+        res = super()._prepare_account_move_line(qty, cost, credit_account_id, debit_account_id, description)
+        
+        if self.boq_line_id and self.boq_line_id.analytic_distribution:
+            # Use list comprehension for more efficient processing
+            return [
+                (command, cid, dict(vals, **{
+                    'analytic_distribution': self.boq_line_id.analytic_distribution
+                }) if (
+                    len(tuple_data) == 3 and 
+                    vals.get('account_id') == debit_account_id
+                ) else vals)
+                for command, cid, vals in res
+            ]
+            
+        return res
+
+    # ---------------------------------------------------------
+    # Subtask 1.1: Consumption Recording & Validation
+    # ---------------------------------------------------------
+
+    def _action_done(self, cancel_backorder=False):
+        """
+        Override _action_done to:
+        1. Enforce BOQ limits (Validation)
+        2. Create Consumption Ledger entries (Recording)
+        """
+        # 1. PRE-VALIDATION PHASE (Before move is Done)
+        # Pre-filter moves that need validation
+        moves_to_validate = self.filtered(
+            lambda m: (
+                m.boq_line_id and 
+                m.state != 'done' and 
+                m.location_dest_id.usage in ('customer', 'production') and
+                m.quantity > 0
+            )
+        )
+        
+        if moves_to_validate:
+            # Bulk read remaining quantities to avoid N+1 queries
+            boq_line_ids = moves_to_validate.mapped('boq_line_id.id')
+            boq_lines = self.env['construction.boq.line'].browse(boq_line_ids)
+            
+            # Create a dictionary for quick lookup
+            remaining_qty_dict = {
+                line.id: line.remaining_quantity
+                for line in boq_lines
+                if not line.allow_over_consumption
+            }
+            
+            # Check all moves in batch
+            invalid_moves = []
+            for move in moves_to_validate:
+                remaining_qty = remaining_qty_dict.get(move.boq_line_id.id)
+                if remaining_qty is not None and move.quantity > remaining_qty:
+                    invalid_moves.append(move)
+            
+            if invalid_moves:
+                move_info = [
+                    _("%s: Issued Quantity (%s) exceeds BOQ Remaining Quantity (%s)") % (
+                        m.product_id.name,
+                        m.quantity,
+                        remaining_qty_dict[m.boq_line_id.id]
+                    )
+                    for m in invalid_moves
+                ]
+                raise ValidationError(
+                    _('Cannot process stock moves:\n%s') % 
+                    "\n".join(move_info)
+                )
+
+        # 2. CALL SUPER (Perform the Stock Move)
+        res = super()._action_done(cancel_backorder=cancel_backorder)
+
+        # 3. POST-PROCESSING PHASE (Create Consumption Ledger)
+        Consumption = self.env['construction.boq.consumption']
+        
+        # Filter moves that need consumption records
+        moves_for_consumption = self.filtered(
+            lambda m: (
+                m.state == 'done' and 
+                m.boq_line_id and 
+                m.location_dest_id.usage in ('customer', 'production')
+            )
+        )
+        
+        if moves_for_consumption:
+            # Prepare all consumption records in batch
+            consumption_vals = []
+            today = fields.Date.today()
+            user_id = self.env.user.id
+            
+            for move in moves_for_consumption:
+                price_unit = abs(move.price_unit)  # Standard Cost / Moving Average Cost
+                amount_consumed = price_unit * move.quantity
+                
+                consumption_vals.append({
+                    'boq_line_id': move.boq_line_id.id,
+                    'source_model': 'stock.move',
+                    'source_id': move.id,
+                    'quantity': move.quantity,
+                    'amount': amount_consumed,
+                    'date': move.date or today,
+                    'user_id': user_id
+                })
+            
+            # Create all consumption records in a single database operation
+            if consumption_vals:
+                Consumption.create(consumption_vals)
+                
+                # Optional: Group by BOQ line and trigger check_consumption once per line
+                boq_line_ids = set(move.boq_line_id.id for move in moves_for_consumption)
+                boq_lines = self.env['construction.boq.line'].browse(list(boq_line_ids))
+                boq_lines.check_consumption(0, 0)  # Trigger checks/recomputes if needed
+
+        return res
+========== ./security/construction_security.xml ==========
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ./security/construction_security.xml -->
+<odoo>
+    <data noupdate="1">
+        <!-- All rules should use consistent field access patterns -->
+        <!-- Rule for main BOQ model -->
+        <record id="rule_construction_boq_multi_company" model="ir.rule">
+            <field name="name">Construction BOQ Multi-Company</field>
+            <field name="model_id" ref="model_construction_boq"/>
+            <field name="global" eval="True"/>
+            <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        </record>
+
+        <!-- Rule for BOQ Line model -->
+        <record id="rule_construction_boq_line_multi_company" model="ir.rule">
+            <field name="name">Construction BOQ Line Multi-Company</field>
+            <field name="model_id" ref="model_construction_boq_line"/>
+            <field name="global" eval="True"/>
+            <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        </record>
+
+        <!-- Rule for BOQ Consumption model -->
+        <record id="rule_construction_boq_consumption_multi_company" model="ir.rule">
+            <field name="name">Construction BOQ Consumption Multi-Company</field>
+            <field name="model_id" ref="model_construction_boq_consumption"/>
+            <field name="global" eval="True"/>
+            <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        </record>
+
+        <!-- Rule for BOQ Report model -->
+        <record id="rule_construction_boq_report_multi_company" model="ir.rule">
+            <field name="name">Construction BOQ Report Multi-Company</field>
+            <field name="model_id" ref="model_construction_boq_report"/>
+            <field name="global" eval="True"/>
+            <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>
+========== ./security/ir.model.access.csv ==========
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_boq_site_engineer,construction.boq.site.eng,model_construction_boq,group_site_engineer,1,0,0,0
+access_boq_project_manager,construction.boq.project.manager,model_construction_boq,group_project_manager,1,1,1,1
+access_boq_line_site_engineer,construction.boq.line.site.eng,model_construction_boq_line,group_site_engineer,1,0,0,0
+access_boq_line_project_manager,construction.boq.line.project.manager,model_construction_boq_line,group_project_manager,1,1,1,1
+access_boq_consumption_site_engineer,construction.boq.consumption.site.eng,model_construction_boq_consumption,group_site_engineer,1,0,1,0
+access_boq_consumption_project_manager,construction.boq.consumption.project.manager,model_construction_boq_consumption,group_project_manager,1,0,1,0
+access_boq_revision_site_engineer,construction.boq.revision.site.eng,model_construction_boq_revision,group_site_engineer,1,0,0,0
+access_boq_revision_project_manager,construction.boq.revision.project.manager,model_construction_boq_revision,group_project_manager,1,1,1,1
+access_construction_boq_report,construction.boq.report,model_construction_boq_report,base.group_user,1,0,0,0
+access_boq_section_site_engineer,construction.boq.section.site.eng,model_construction_boq_section,group_site_engineer,1,0,0,0
+access_boq_section_project_manager,construction.boq.section.project.manager,model_construction_boq_section,group_project_manager,1,1,1,1
+========== ./security/security.xml ==========
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="module_category_construction" model="ir.module.category">
+            <field name="name">Construction Management</field>
+            <field name="description">Manage Construction BOQs, Budgets, and Consumption.</field>
+            <field name="sequence">20</field>
+        </record>
+
+        <record id="group_site_engineer" model="res.groups">
+            <field name="name">Site Engineer</field>
+            <field name="category_id" ref="module_category_construction"/>
+            <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+            <field name="comment">Can view BOQs and request consumption.</field>
+        </record>
+
+        <record id="group_procurement" model="res.groups">
+            <field name="name">Procurement</field>
+            <field name="category_id" ref="module_category_construction"/>
+            <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+            <field name="comment">Can link Purchase Orders to BOQ Lines.</field>
+        </record>
+
+        <record id="group_project_manager" model="res.groups">
+            <field name="name">Project Manager</field>
+            <field name="category_id" ref="module_category_construction"/>
+            <field name="implied_ids" eval="[(4, ref('group_site_engineer'))]"/>
+            <field name="users" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
+            <field name="comment">Can Approve and Lock BOQs.</field>
+        </record>
+
+        <record id="group_finance_head" model="res.groups">
+            <field name="name">Finance Head</field>
+            <field name="category_id" ref="module_category_construction"/>
+            <field name="implied_ids" eval="[(4, ref('group_project_manager'))]"/>
+            <field name="comment">Can override consumption limits and exceptions.</field>
+        </record>
+    </data>
+</odoo>
+========== ./tests/test_boq_report_security.py ==========
+from odoo.tests.common import TransactionCase
+
+class TestBOQReportSecurity(TransactionCase):
+
+    def test_report_company_security(self):
+        """ Verify that construction.boq.report has company_id field and multi-company rule. """
+
+        # 1. Check if company_id field exists in the model
+        model = self.env['construction.boq.report']
+        self.assertIn('company_id', model.fields_get(), "construction.boq.report missing company_id field for multi-company security")
+
+        # 2. Check if there is a record rule for it
+        # We look for a rule that applies to this model and restricts by company_id
+        rules = self.env['ir.rule'].search([('model_id.model', '=', 'construction.boq.report')])
+        self.assertTrue(rules, "No record rules found for construction.boq.report")
+
+        # Check if any rule enforces company_id check
+        found_security_rule = False
+        for rule in rules:
+            if 'company_id' in rule.domain_force:
+                found_security_rule = True
+                break
+
+        self.assertTrue(found_security_rule, "No multi-company security rule found for construction.boq.report")
+
+========== ./tests/test_performance.py ==========
+from odoo.tests.common import TransactionCase
+
+class TestPerformance(TransactionCase):
+
+    def setUp(self):
+        super(TestPerformance, self).setUp()
+        self.project = self.env['project.project'].create({'name': 'Test Project'})
+        self.boq = self.env['construction.boq'].create({
+            'name': 'Test BOQ',
+            'project_id': self.project.id,
+            'state': 'approved'
+        })
+        self.product = self.env['product.product'].create({
+            'name': 'Test Product',
+            'standard_price': 100,
+        })
+        # Create BOQ Line
+        self.boq_line = self.env['construction.boq.line'].create({
+            'boq_id': self.boq.id,
+            'product_id': self.product.id,
+            'quantity': 100,
+            'estimated_rate': 100,
+            'expense_account_id': self.env['account.account'].search([], limit=1).id,
+            'uom_id': self.env.ref('uom.product_uom_unit').id,
+        })
+
+        # Create some consumptions
+        self.env['construction.boq.consumption'].create({
+            'boq_line_id': self.boq_line.id,
+            'quantity': 10,
+            'amount': 1000,
+            'source_model': 'stock.move',
+            'source_id': 1
+        })
+        self.env['construction.boq.consumption'].create({
+            'boq_line_id': self.boq_line.id,
+            'quantity': 20,
+            'amount': 2000,
+            'source_model': 'stock.move',
+            'source_id': 2
+        })
+
+    def test_consumption_compute(self):
+        """ Verify that splitting the compute method works correctly. """
+
+        # Invalidate cache to force read from DB
+        self.boq_line.invalidate_recordset()
+
+        # Read stored fields - should be correct in DB
+        self.assertEqual(self.boq_line.consumed_quantity, 30)
+        self.assertEqual(self.boq_line.consumed_amount, 3000)
+
+        # Read non-stored field
+        # This triggers _compute_consumption_percentage
+        # It should NOT trigger _compute_consumption (which computes stored fields)
+        # We can't easily assert on function calls here without mocking,
+        # but we can verify the result is correct.
+        self.assertEqual(self.boq_line.consumption_percentage, 3000 / 10000)
+
+        # Add a new consumption
+        self.env['construction.boq.consumption'].create({
+            'boq_line_id': self.boq_line.id,
+            'quantity': 10,
+            'amount': 1000,
+            'source_model': 'stock.move',
+            'source_id': 3
+        })
+
+        # Computed fields should update
+        self.assertEqual(self.boq_line.consumed_quantity, 40)
+        self.assertEqual(self.boq_line.consumption_percentage, 4000 / 10000)
+
+========== ./tests/test_security_boq.py ==========
+# -*- coding: utf-8 -*-
+from odoo.tests.common import TransactionCase
+from odoo.exceptions import ValidationError
+
+class TestBOQSecurity(TransactionCase):
+    """
+    Test suite to verify security constraints on BOQ Consumption.
+    Specifically checks that direct creation of consumption records
+    adheres to budget limits, preventing API-based bypasses.
+    """
+
+    def setUp(self):
+        super(TestBOQSecurity, self).setUp()
+
+        # Setup basic data
+        self.project = self.env['project.project'].create({'name': 'Test Project'})
+        self.boq = self.env['construction.boq'].create({
+            'project_id': self.project.id,
+            'name': 'Test BOQ',
+            'state': 'approved'
+        })
+
+        self.section = self.env['construction.boq.section'].create({'name': 'Test Section'})
+        self.product = self.env['product.product'].create({'name': 'Test Product', 'standard_price': 100})
+        self.uom = self.env.ref('uom.product_uom_unit')
+
+        self.boq_line = self.env['construction.boq.line'].create({
+            'boq_id': self.boq.id,
+            'section_id': self.section.id,
+            'product_id': self.product.id,
+            'quantity': 10.0,
+            'estimated_rate': 100.0,
+            'uom_id': self.uom.id,
+            'cost_type': 'material',
+            'expense_account_id': self.env['account.account'].search([], limit=1).id
+        })
+
+        # Budget: 10 Qty, 1000 Amount
+
+    def test_direct_consumption_creation_within_limits(self):
+        """Test that creating consumption within limits succeeds."""
+        consumption = self.env['construction.boq.consumption'].create({
+            'boq_line_id': self.boq_line.id,
+            'source_model': 'test.model',
+            'source_id': 1,
+            'quantity': 5.0,
+            'amount': 500.0,
+        })
+        self.assertTrue(consumption)
+        self.assertEqual(self.boq_line.consumed_quantity, 5.0)
+
+    def test_direct_consumption_creation_exceeds_limits(self):
+        """Test that creating consumption exceeding limits fails."""
+        with self.assertRaises(ValidationError, msg="BOQ Quantity Exceeded"):
+            self.env['construction.boq.consumption'].create({
+                'boq_line_id': self.boq_line.id,
+                'source_model': 'test.model',
+                'source_id': 2,
+                'quantity': 11.0, # Exceeds 10
+                'amount': 1100.0,
+            })
+
+    def test_incremental_consumption_exceeds_limits(self):
+        """Test that incremental consumption respecting total limit works, and exceeding fails."""
+        # First consumption (OK)
+        self.env['construction.boq.consumption'].create({
+            'boq_line_id': self.boq_line.id,
+            'source_model': 'test.model',
+            'source_id': 3,
+            'quantity': 8.0,
+            'amount': 800.0,
+        })
+
+        # Second consumption (Fail - Total 12 > 10)
+        with self.assertRaises(ValidationError):
+            self.env['construction.boq.consumption'].create({
+                'boq_line_id': self.boq_line.id,
+                'source_model': 'test.model',
+                'source_id': 4,
+                'quantity': 4.0,
+                'amount': 400.0,
+            })
+
+    def test_negative_consumption_bypass(self):
+        """Test that negative consumption (refund) is allowed and increases budget."""
+        # Consume all budget
+        self.env['construction.boq.consumption'].create({
+            'boq_line_id': self.boq_line.id,
+            'source_model': 'test.model',
+            'source_id': 5,
+            'quantity': 10.0,
+            'amount': 1000.0,
+        })
+
+        # Refund (Negative)
+        self.env['construction.boq.consumption'].create({
+            'boq_line_id': self.boq_line.id,
+            'source_model': 'test.model',
+            'source_id': 6,
+            'quantity': -2.0,
+            'amount': -200.0,
+        })
+
+        # Now we have 2 available again. Consume 1. (Should pass)
+        self.env['construction.boq.consumption'].create({
+            'boq_line_id': self.boq_line.id,
+            'source_model': 'test.model',
+            'source_id': 7,
+            'quantity': 1.0,
+            'amount': 100.0,
+        })
+
+========== ./views/account_move_views.xml ==========
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_move_form_inherit_boq" model="ir.ui.view">
+        <field name="name">account.move.form.inherit.boq</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="account.view_move_form"/>
+        <field name="arch" type="xml">
+            
+            <xpath expr="//field[@name='invoice_line_ids']/list//field[@name='product_id']" position="before">
+                <field name="boq_line_id" 
+                    optional="show" 
+                    domain="[('boq_id.state', 'in', ('approved', 'locked'))]"
+                    options="{'no_create': True}"
+                />
+            </xpath>
+            
+        </field>
+    </record>
+</odoo>
+========== ./views/boq_line_views.xml ==========
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_construction_boq_line_simple_tree" model="ir.ui.view">
+        <field name="name">construction.boq.line.simple.tree</field>
+        <field name="model">construction.boq.line</field>
+        <field name="arch" type="xml">
+            <list string="BOQ Lines" editable="bottom" decoration-danger="remaining_amount &lt; 0" decoration-warning="remaining_amount &lt; (budget_amount * 0.1)">
+                <field name="sequence" widget="handle"/>
+                <field name="display_type" invisible="1"/>
+
+                <field name="name" widget="section_and_note_text" invisible="not display_type"/>
+
+                <field name="product_id" invisible="display_type != False" widget="many2one_avatar"/>
+                <field name="quantity" invisible="display_type != False" string="Budget Qty"/>
+                <field name="uom_id" invisible="display_type != False" string="UoM" optional="show"/>
+                <field name="estimated_rate" invisible="display_type != False" string="Budget Rate"/>
+                <field name="budget_amount" invisible="display_type != False" widget="monetary" string="Budget Amount"/>
+                <field name="remaining_amount" invisible="display_type != False" widget="monetary" string="Available Budget"/>
+
+                <field name="currency_id" invisible="1"/>
+                <field name="product_config_valid" invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_construction_boq_line_advanced_form" model="ir.ui.view">
+        <field name="name">construction.boq.line.advanced.form</field>
+        <field name="model">construction.boq.line</field>
+        <field name="arch" type="xml">
+            <form string="Advanced BOQ Line">
+                <header>
+                    <field name="product_config_valid" invisible="1"/>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_open_advanced_view" type="object" class="oe_stat_button" icon="fa-external-link" string="Advanced View" invisible="1"/>
+                    </div>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="e.g. Concrete M25 Grade"/>
+                        </h1>
+                    </div>
+
+                    <group>
+                        <group string="Basic Information">
+                            <field name="product_id" widget="many2one_avatar" required="not display_type"/>
+                            <field name="quantity" required="not display_type"/>
+                            <field name="uom_id" required="not display_type"/>
+                            <field name="estimated_rate"/>
+                            <field name="budget_amount" widget="monetary" readonly="1"/>
+                            <field name="currency_id" invisible="1"/>
+                        </group>
+
+                        <group string="Classification">
+                            <field name="cost_type" widget="radio" options="{'horizontal': true}"/>
+                            <field name="task_id" options="{'no_create': True}"/>
+                            <field name="activity_code"/>
+                            <field name="display_type" invisible="1"/>
+                        </group>
+                    </group>
+
+                    <group>
+                        <group string="Budget Tracking">
+                            <field name="consumed_quantity" readonly="1"/>
+                            <field name="consumed_amount" widget="monetary" readonly="1"/>
+                            <field name="remaining_quantity" readonly="1"/>
+                            <field name="remaining_amount" widget="monetary" readonly="1" string="Available Budget"/>
+                            <field name="allow_over_consumption" widget="boolean_toggle" groups="entrpryz_construction_boq.group_finance_head"/>
+                        </group>
+
+                        <group string="Accounting">
+                            <field name="expense_account_id" required="not display_type"/>
+                            <field name="analytic_account_id" readonly="1"/>
+                            <field name="analytic_distribution" widget="analytic_distribution"/>
+                        </group>
+                    </group>
+
+                    <notebook>
+                        <page string="Description" name="description">
+                            <field name="description" placeholder="Detailed description or specifications..." nolabel="1"/>
+                        </page>
+
+                        <page string="Consumption History" name="consumption">
+                            <field name="consumption_ids" readonly="1">
+                                <list>
+                                    <field name="date"/>
+                                    <field name="source_model"/>
+                                    <field name="quantity"/>
+                                    <field name="amount"/>
+                                    <field name="user_id"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <footer>
+                    <button name="action_open_advanced_view" type="object" string="Close" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_construction_boq_line_advanced" model="ir.actions.act_window">
+        <field name="name">Advanced BOQ Line</field>
+        <field name="res_model">construction.boq.line</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="view_id" ref="view_construction_boq_line_advanced_form"/>
+        <field name="context">{'form_view_ref': 'entrpryz_construction_boq.view_construction_boq_line_advanced_form'}</field>
+    </record>
+</odoo>
+========== ./views/boq_report_views.xml ==========
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_construction_boq_report_search" model="ir.ui.view">
+        <field name="name">construction.boq.report.search</field>
+        <field name="model">construction.boq.report</field>
+        <field name="arch" type="xml">
+            <search string="BOQ Analysis">
+                <field name="project_id"/>
+                <field name="boq_id"/>
+                <field name="product_id"/>
+                <field name="analytic_account_id"/>
+                
+                <separator/>
+                <filter string="Material" name="material" domain="[('cost_type', '=', 'material')]"/>
+                <filter string="Labor" name="labor" domain="[('cost_type', '=', 'labor')]"/>
+                <filter string="Services" name="service" domain="[('cost_type', '=', 'service')]"/>
+                <filter string="Subcontract" name="subcontract" domain="[('cost_type', '=', 'subcontract')]"/>
+                
+                <separator/>
+                <filter string="Over Budget" name="over_budget" domain="[('variance_amount', '&lt;', 0)]"/>
+                
+                <group expand="1" string="Group By">
+                    <filter string="Project" name="group_project" context="{'group_by': 'project_id'}"/>
+                    <filter string="BOQ Reference" name="group_boq" context="{'group_by': 'boq_id'}"/>
+                    <filter string="Cost Type" name="group_cost_type" context="{'group_by': 'cost_type'}"/>
+                    <filter string="Analytic Account" name="group_analytic" context="{'group_by': 'analytic_account_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_construction_boq_report_pivot" model="ir.ui.view">
+        <field name="name">construction.boq.report.pivot</field>
+        <field name="model">construction.boq.report</field>
+        <field name="arch" type="xml">
+            <pivot string="BOQ Budget vs Actual" display_quantity="true" disable_linking="true">
+                <field name="project_id" type="row"/>
+                <field name="cost_type" type="col"/>
+                <field name="budget_amount" type="measure"/>
+                <field name="consumed_amount" type="measure"/>
+                <field name="variance_amount" type="measure"/>
+                <field name="consumption_progress" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <record id="view_construction_boq_report_graph" model="ir.ui.view">
+        <field name="name">construction.boq.report.graph</field>
+        <field name="model">construction.boq.report</field>
+        <field name="arch" type="xml">
+            <graph string="Project Cost Analysis" type="bar" stacked="False">
+                <field name="project_id"/>
+                <field name="cost_type"/>
+                <field name="budget_amount" type="measure"/>
+                <field name="consumed_amount" type="measure"/>
+            </graph>
+        </field>
+    </record>
+
+    <record id="action_construction_boq_report" model="ir.actions.act_window">
+        <field name="name">Budget vs Actual Analysis</field>
+        <field name="res_model">construction.boq.report</field>
+        <field name="view_mode">pivot,graph</field>
+        <field name="context">{'group_by': ['project_id'], 'search_default_group_project': 1}</field>
+        <field name="search_view_id" ref="view_construction_boq_report_search"/>
+    </record>
+
+    <menuitem id="menu_construction_reporting" 
+        name="Reporting" 
+        parent="menu_construction_root" 
+        sequence="20"
+    />
+
+    <menuitem id="menu_construction_boq_analysis" 
+        name="Budget vs Actual" 
+        parent="menu_construction_reporting" 
+        action="action_construction_boq_report" 
+        sequence="1"
+    />
+</odoo>
+========== ./views/boq_views.xml ==========
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_construction_boq_form" model="ir.ui.view">
+        <field name="name">construction.boq.form</field>
+        <field name="model">construction.boq</field>
+        <field name="arch" type="xml">
+            <form string="Construction BOQ">
+                <header>
+                    <button name="action_submit" string="Submit for Approval" type="object" class="oe_highlight" invisible="state != 'draft'"/>
+                    <button name="action_approve" string="Approve" type="object" class="oe_highlight" invisible="state != 'submitted'"/>
+                    <button name="action_lock" string="Lock" type="object" class="oe_highlight" invisible="state != 'approved'"/>
+                    <button name="action_revise" string="Revise Manually" type="object" invisible="state not in ('approved', 'locked')" confirm="This will archive the current approved BOQ and create a new draft version. Continue?"/>
+                    <button name="action_close" string="Close" type="object" invisible="state not in ('approved', 'locked')" confirm="This will permanently close the BOQ. You cannot reopen it. Continue?"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved,locked,closed"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_history" type="object" class="oe_stat_button" icon="fa-history" string="History" invisible="version == 1"/>
+                    </div>
+                    <widget name="web_ribbon" title="Archived" bg_color="bg-danger" invisible="active"/>
+
+                    <div class="oe_title">
+                        <label for="name" class="oe_edit_only"/>
+                        <h1>
+                            <field name="name" placeholder="e.g. BOQ-2024-001"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Project Scope">
+                            <field name="active" invisible="1"/>
+                            <field name="project_id" readonly="state == 'closed'" placeholder="Select a project..."/>
+                            <field name="analytic_account_id" readonly="state == 'closed'" options="{'no_create': True}" placeholder="Select cost center..."/>
+                            <field name="company_id" groups="base.group_multi_company" readonly="state == 'closed'"/>
+                        </group>
+                        <group string="Control &amp; Versioning">
+                            <label for="version" string="Version"/>
+                            <div class="o_row">
+                                <field name="version" readonly="1" class="fw-bold"/>
+                                <span class="text-muted" invisible="not previous_boq_id">
+                                    (Previous: <field name="previous_boq_id" readonly="1" options="{'no_open': True}"/>
+)
+                                </span>
+                            </div>
+                            <field name="approval_date"/>
+                            <field name="approved_by" widget="many2one_avatar_user"/>
+                            <field name="currency_id" invisible="1"/>
+                        </group>
+                    </group>
+
+                    <notebook>
+                        <page string="Budget Lines" name="lines">
+                            <field name="boq_line_ids" widget="section_and_note_one2many" readonly="state == 'closed'">
+                                <list editable="bottom" decoration-danger="remaining_amount &lt; 0" decoration-warning="remaining_amount &lt; (budget_amount * 0.1)">
+                                    <control>
+                                        <create name="add_line_control" string="Add a line"/>
+                                        <create name="add_section_control" string="Add a section" context="{'default_display_type': 'line_section'}"/>
+                                        <create name="add_note_control" string="Add a note" context="{'default_display_type': 'line_note'}"/>
+                                    </control>
+
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="display_type" column_invisible="1"/>
+
+                                    <field name="section_id" invisible="display_type != 'line_section'" options="{'no_create': False}"/>
+
+                                    <field name="name" widget="section_and_note_text" invisible="not display_type"/>
+
+                                    <field name="product_id" invisible="display_type" widget="many2one_avatar"/>
+                                    <field name="quantity" invisible="display_type" string="Budget Qty"/>
+                                    <field name="uom_id" invisible="display_type" optional="show" string="UoM"/>
+
+                                    <field name="estimated_rate" invisible="display_type" string="Budget Rate"/>
+
+                                    <field name="analytic_distribution" widget="analytic_distribution" optional="hide" invisible="display_type"/>
+
+                                    <field name="budget_amount" invisible="display_type" widget="monetary" sum="Total Budget"/>
+                                    <field name="remaining_amount" invisible="display_type" widget="monetary" string="Available Budget"/>
+
+                                    <field name="currency_id" column_invisible="1"/>
+                                    <field name="product_config_valid" column_invisible="1"/>
+
+                                    <field name="id" widget="handle"/>
+                                    <button name="action_open_advanced_view" type="object" icon="fa-external-link" string="Advanced" invisible="display_type" class="oe_edit_only"/>
+                                </list>
+                            </field>
+
+                            <group name="note_group" col="6" class="mt-2 mt-md-0">
+                                <group class="oe_subtotal_footer oe_right" colspan="2" name="sale_total">
+                                    <field name="total_budget" widget="monetary" options="{'currency_field': 'currency_id'}"/>
+                                </group>
+                                <div class="clearfix"/>
+                            </group>
+                        </page>
+
+                        <page string="Audit Trail" name="audit">
+                            <group>
+                                <group>
+                                    <field name="create_uid" widget="many2one_avatar_user"/>
+                                    <field name="create_date"/>
+                                </group>
+                                <group>
+                                    <field name="write_uid" widget="many2one_avatar_user"/>
+                                    <field name="write_date"/>
+                                </group>
+                            </group>
+                            <separator string="Revision History"/>
+                            <field name="display_revision_ids" readonly="1">
+                                <list decoration-muted="True">
+                                    <field name="create_date" string="Date"/>
+                                    <field name="original_boq_id" string="Snapshot Version"/>
+                                    <field name="revision_reason"/>
+                                    <field name="approved_by" widget="many2one_avatar_user"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_construction_boq_section_form" model="ir.ui.view">
+        <field name="name">construction.boq.section.form</field>
+        <field name="model">construction.boq.section</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="code"/>
+                        <field name="sequence"/>
+                        <field name="description"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_construction_boq_section_tree" model="ir.ui.view">
+        <field name="name">construction.boq.section.list</field>
+        <field name="model">construction.boq.section</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="code"/>
+                <field name="description"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_construction_boq_section" model="ir.actions.act_window">
+        <field name="name">BOQ Sections</field>
+        <field name="res_model">construction.boq.section</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <record id="view_construction_boq_search" model="ir.ui.view">
+        <field name="name">construction.boq.search</field>
+        <field name="model">construction.boq</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="project_id"/>
+                <field name="analytic_account_id"/>
+                <filter string="My BOQs" name="my_boqs" domain="[('create_uid', '=', uid)]"/>
+                <separator/>
+                <filter string="Draft" name="draft" domain="[('state', '=', 'draft')]"/>
+                <filter string="Approved" name="approved" domain="[('state', '=', 'approved')]"/>
+                <separator/>
+                <filter string="Archived" name="inactive" domain="[('active', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter string="Project" name="group_project" context="{'group_by': 'project_id'}"/>
+                    <filter string="Status" name="group_state" context="{'group_by': 'state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_construction_boq_tree" model="ir.ui.view">
+        <field name="name">construction.boq.list</field>
+        <field name="model">construction.boq</field>
+        <field name="arch" type="xml">
+            <list string="Construction BOQs" decoration-info="state == 'draft'" decoration-muted="state == 'closed'" sample="1">
+                <field name="name"/>
+                <field name="version"/>
+                <field name="project_id"/>
+                <field name="total_budget" sum="Total Budget" widget="monetary"/>
+                <field name="state" widget="badge" decoration-success="state == 'approved'"/>
+                <field name="currency_id" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_construction_boq" model="ir.actions.act_window">
+        <field name="name">Construction BOQs</field>
+        <field name="res_model">construction.boq</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_group_project': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create a new Construction BOQ
+            </p>
+            <p>
+                Manage your project budgets, track costs, and handle revisions.
+                Start by selecting a project and defining the budget lines.
+            </p>
+        </field>
+    </record>
+
+    <menuitem id="menu_construction_root" name="Construction" web_icon="entrpryz_construction_boq,static/description/icon.png" sequence="10" />
+    <menuitem id="menu_construction_boq" name="BOQs" parent="menu_construction_root" action="action_construction_boq" sequence="1"/>
+
+    <menuitem id="menu_construction_configuration" name="Configuration" parent="menu_construction_root" sequence="100"/>
+    <menuitem id="menu_construction_boq_section" name="BOQ Sections" parent="menu_construction_configuration" action="action_construction_boq_section" sequence="1"/>
+
+</odoo>
+========== ./views/project_task_views.xml ==========
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_task_form2_inherit_boq" model="ir.ui.view">
+        <field name="name">project.task.form.inherit.boq</field>
+        <field name="model">project.task</field>
+        <field name="inherit_id" ref="project.view_task_form2"/>
+        <field name="arch" type="xml">
+            <field name="tag_ids" position="after">
+                <field name="activity_code"/>
+            </field>
+        </field>
+    </record>
+</odoo>
+========== ./views/purchase_views.xml ==========
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="purchase_order_form_inherit_boq" model="ir.ui.view">
+        <field name="name">purchase.order.form.inherit.boq</field>
+        <field name="model">purchase.order</field>
+        <field name="inherit_id" ref="purchase.purchase_order_form"/>
+        <field name="arch" type="xml">
+            
+            <field name="partner_id" position="before">
+                <field name="purchase_type" widget="radio" options="{'horizontal': true}" class="oe_edit_only"/>
+            </field>
+
+            <field name="partner_ref" position="after">
+                <field name="project_id" 
+                    placeholder="Select Project"
+                    invisible="purchase_type == 'normal'"
+                    required="purchase_type == 'boq'"
+                />
+
+                <field name="boq_id" 
+                    placeholder="Select Approved BOQ"
+                    invisible="purchase_type == 'normal'"
+                    required="purchase_type == 'boq'"
+                    options="{'no_create': True}"
+                />
+            </field>
+
+            <xpath expr="//field[@name='order_line']/list//field[@name='product_id']" position="before">
+                <field name="boq_line_id"
+                    optional="show"
+                    column_invisible="parent.purchase_type == 'normal'"
+                    required="parent.purchase_type == 'boq'"
+                    domain="[('boq_id', '=', parent.boq_id)]"
+                    options="{'no_create': True}"
+                />
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_purchase_order_filter_inherit_boq" model="ir.ui.view">
+        <field name="name">purchase.order.list.select.inherit.boq</field>
+        <field name="model">purchase.order</field>
+        <field name="inherit_id" ref="purchase.view_purchase_order_filter"/>
+        <field name="arch" type="xml">
+            <field name="partner_id" position="after">
+                <field name="project_id"/>
+                <field name="purchase_type"/>
+            </field>
+            <group position="inside">
+                <filter string="Project" name="groupby_project" domain="[]" context="{'group_by': 'project_id'}"/>
+                <filter string="Purchase Mode" name="groupby_type" domain="[]" context="{'group_by': 'purchase_type'}"/>
+            </group>
+        </field>
+    </record>
+</odoo>
+========== ./views/stock_views.xml ==========
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_picking_form_inherit_boq" model="ir.ui.view">
+        <field name="name">stock.picking.form.inherit.boq</field>
+        <field name="model">stock.picking</field>
+        <field name="inherit_id" ref="stock.view_picking_form"/>
+        <field name="arch" type="xml">
+            
+            <xpath expr="//field[@name='move_ids_without_package']/list//field[@name='product_id']" position="after">
+                <field name="boq_line_id" 
+                    optional="show" 
+                    domain="[('product_id', '=', product_id), ('boq_id.state', 'in', ('approved', 'locked'))]"
+                    options="{'no_create': True}"
+                />
+            </xpath>
+
+        </field>
+    </record>
+</odoo>
