@@ -1,3 +1,4 @@
+========== ./models/boq.py ==========
 # -*- coding: utf-8 -*-
 import re
 from odoo import models, fields, api, _
@@ -419,14 +420,29 @@ class ConstructionBOQLine(models.Model):
             if account:
                 self.expense_account_id = account
             
+            # [FIX] Check for missing configurations but allow user to fix them
+            warnings = []
             if not self.product_id.uom_id:
-                return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Unit of Measure defined.') % self.product_id.name}}
-            
+                warnings.append(_('Unit of Measure is missing.'))
             if not self.product_id.standard_price:
-                return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Standard Price defined.') % self.product_id.name}}
-            
+                warnings.append(_('Standard Price is missing.'))
             if not self.product_id.property_account_expense_id and not self.product_id.categ_id.property_account_expense_categ_id:
-                return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Expense Account defined.') % self.product_id.name}}
+                warnings.append(_('Expense Account is missing.'))
+
+            if warnings:
+                return {'warning': {'title': _('Product Configuration Warning'), 'message': _('Product "%s" issues:\n%s') % (self.product_id.name, "\n".join(warnings))}}
+
+    # [FIX] Added automatic selection of Analytic Distribution from BOQ Header
+    @api.onchange('boq_id', 'product_id')
+    def _onchange_setup_analytics(self):
+        """
+        Automatically populate the Analytic Distribution (JSON) from the BOQ Header's
+        Analytic Account if it hasn't been set manually yet.
+        """
+        for rec in self:
+            if rec.boq_id.analytic_account_id and not rec.analytic_distribution:
+                # Create the JSON structure expected by analytic.mixin: {'account_id_str': percentage}
+                rec.analytic_distribution = {str(rec.boq_id.analytic_account_id.id): 100.0}
 
     @api.onchange('section_id')
     def _onchange_section_id(self):
@@ -446,8 +462,6 @@ class ConstructionBOQLine(models.Model):
         for rec in self.filtered(lambda r: r.product_id and r.display_type is False):
             if not rec.product_id.uom_id:
                 raise ValidationError(_('Product "%s" is not properly configured. Unit of Measure is missing.') % rec.product_id.name)
-            if not rec.product_id.standard_price:
-                raise ValidationError(_('Product "%s" is not properly configured. Standard Price is missing.') % rec.product_id.name)
             
             # [FIX] Check if account exists on line OR product before raising error
             account = rec.expense_account_id or \
@@ -474,6 +488,13 @@ class ConstructionBOQLine(models.Model):
     # -------------------------------------------------------------------------
     @api.model_create_multi
     def create(self, vals_list):
+        # [FIX] Ensure analytic distribution is set on creation if missing
+        for vals in vals_list:
+            if 'boq_id' in vals and 'analytic_distribution' not in vals:
+                boq = self.env['construction.boq'].browse(vals['boq_id'])
+                if boq.analytic_account_id:
+                    vals['analytic_distribution'] = {str(boq.analytic_account_id.id): 100.0}
+
         boq_ids = {vals['boq_id'] for vals in vals_list if vals.get('boq_id')}
         if boq_ids and not self.env.context.get('revision_copy'):
             boqs = self.env['construction.boq'].browse(list(boq_ids))
