@@ -12,6 +12,7 @@
 
                 <field name="product_id" invisible="display_type != False" widget="many2one_avatar"/>
                 <field name="quantity" invisible="display_type != False" string="Budget Qty"/>
+                <field name="uom_id" invisible="display_type != False" string="UoM" optional="show"/>
                 <field name="estimated_rate" invisible="display_type != False" string="Budget Rate"/>
                 <field name="budget_amount" invisible="display_type != False" widget="monetary" string="Budget Amount"/>
                 <field name="remaining_amount" invisible="display_type != False" widget="monetary" string="Available Budget"/>
