@@ -3,7 +3,7 @@ name: Deploy to Odoo Server
 on:
   push:
     branches:
-      - main # Or 'master', depending on your branch name
+      - main
 
 jobs:
   deploy:
@@ -21,10 +21,13 @@ jobs:
             # 1. Go to the folder
             cd /root/odoo-projects/ELB/addons/entrpryz_construction_boq
 
+            # ⬇️ NEW LINE: Tell Git to trust this folder!
+            git config --global --add safe.directory /root/odoo-projects/ELB/addons/entrpryz_construction_boq
+
             # 2. Pull the latest code
             git pull origin main
 
-            # 3. Fix Permissions (The commands you gave me)
+            # 3. Fix Permissions
             echo "🔧 Fixing permissions..."
             chown -R 101:101 /root/odoo-projects/ELB/addons/entrpryz_construction_boq
             chmod -R 755 /root/odoo-projects/ELB/addons/entrpryz_construction_boq
