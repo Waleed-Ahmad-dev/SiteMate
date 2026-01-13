@@ -60,11 +60,16 @@
                                     <field name="sequence" widget="handle"/>
                                     <field name="display_type" column_invisible="1"/>
 
+                                    <field name="section_id" invisible="display_type != 'line_section'" options="{'no_create': False}"/>
+
                                     <field name="name" widget="section_and_note_text" invisible="not display_type"/>
 
                                     <field name="product_id" invisible="display_type" widget="many2one_avatar"/>
                                     <field name="quantity" invisible="display_type" string="Budget Qty"/>
                                     <field name="estimated_rate" invisible="display_type" string="Budget Rate"/>
+
+                                    <field name="analytic_distribution" widget="analytic_distribution" optional="hide" invisible="display_type"/>
+
                                     <field name="budget_amount" invisible="display_type" widget="monetary" sum="Total Budget"/>
                                     <field name="remaining_amount" invisible="display_type" widget="monetary" string="Available Budget"/>
 
@@ -110,6 +115,42 @@
                 <chatter/>
             </form>
         </field>
+    </record>
+
+    <record id="view_construction_boq_section_form" model="ir.ui.view">
+        <field name="name">construction.boq.section.form</field>
+        <field name="model">construction.boq.section</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="code"/>
+                        <field name="sequence"/>
+                        <field name="description"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_construction_boq_section_tree" model="ir.ui.view">
+        <field name="name">construction.boq.section.list</field>
+        <field name="model">construction.boq.section</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="code"/>
+                <field name="description"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_construction_boq_section" model="ir.actions.act_window">
+        <field name="name">BOQ Sections</field>
+        <field name="res_model">construction.boq.section</field>
+        <field name="view_mode">list,form</field>
     </record>
 
     <record id="view_construction_boq_search" model="ir.ui.view">
@@ -167,4 +208,8 @@
 
     <menuitem id="menu_construction_root" name="Construction" web_icon="entrpryz_construction_boq,static/description/icon.png" sequence="10" />
     <menuitem id="menu_construction_boq" name="BOQs" parent="menu_construction_root" action="action_construction_boq" sequence="1"/>
+
+    <menuitem id="menu_construction_configuration" name="Configuration" parent="menu_construction_root" sequence="100"/>
+    <menuitem id="menu_construction_boq_section" name="BOQ Sections" parent="menu_construction_configuration" action="action_construction_boq_section" sequence="1"/>
+
 </odoo>

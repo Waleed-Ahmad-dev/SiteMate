@@ -42,7 +42,6 @@ class ConstructionBOQ(models.Model):
 
     @api.depends('project_id', 'revision_ids')
     def _compute_display_revision_ids(self):
-        """Optimized: Single database query for all records"""
         if not self:
             self.display_revision_ids = False
             return
@@ -70,7 +69,6 @@ class ConstructionBOQ(models.Model):
 
     @api.depends('boq_line_ids.budget_amount', 'currency_id')
     def _compute_total_budget(self):
-        """Optimized: Use sum with mapping for better performance"""
         for rec in self:
             rec.total_budget = sum(rec.boq_line_ids.mapped('budget_amount'))
 
@@ -81,7 +79,6 @@ class ConstructionBOQ(models.Model):
 
     # -- Workflow Actions --
     def action_submit(self):
-        """Optimized: Batch validation and write"""
         boqs_without_lines = self.filtered(lambda r: not r.boq_line_ids)
         if boqs_without_lines:
             raise ValidationError(_('You cannot submit a BOQ with no lines.'))
@@ -89,7 +86,6 @@ class ConstructionBOQ(models.Model):
         self.write({'state': 'submitted'})
 
     def action_approve(self):
-        """Optimized: Batch operations"""
         self._check_boq_before_approval()
         self._check_one_active_boq()
         
@@ -100,11 +96,9 @@ class ConstructionBOQ(models.Model):
         })
 
     def action_lock(self):
-        """Optimized: Batch write"""
         self.write({'state': 'locked'})
 
     def action_close(self):
-        """Optimized: Batch write"""
         self.write({'state': 'closed'})
 
     def action_view_history(self):
@@ -123,10 +117,9 @@ class ConstructionBOQ(models.Model):
         return True
 
     # -------------------------------------------------------------------------
-    # COPY-ON-WRITE (AUTO VERSIONING) LOGIC - OPTIMIZED
+    # COPY-ON-WRITE (AUTO VERSIONING) LOGIC
     # -------------------------------------------------------------------------
     def create_revision_snapshot(self):
-        """Optimized: Batch operations for revision creation"""
         boqs_to_revise = self.filtered(
             lambda b: b.state in ['submitted', 'approved', 'locked']
         )
@@ -199,11 +192,10 @@ class ConstructionBOQ(models.Model):
         return super(ConstructionBOQ, self).write(vals)
 
     # -------------------------------------------------------------------------
-    # CONSTRAINTS - OPTIMIZED
+    # CONSTRAINTS
     # -------------------------------------------------------------------------
     @api.constrains('state')
     def _check_boq_before_approval(self):
-        """Optimized: Single query for all records being approved"""
         boqs_to_check = self.filtered(lambda b: b.state == 'approved')
         if not boqs_to_check:
             return
@@ -214,7 +206,6 @@ class ConstructionBOQ(models.Model):
 
     @api.constrains('project_id', 'version', 'active')
     def _check_unique_active_version(self):
-        """Optimized: Batch validation"""
         active_boqs = self.filtered('active')
         if not active_boqs:
             return
@@ -235,7 +226,6 @@ class ConstructionBOQ(models.Model):
                 raise ValidationError(_('An active BOQ with this version already exists for this project.'))
 
     def _check_one_active_boq(self):
-        """Optimized: Single query for all records"""
         if not self:
             return
             
@@ -261,6 +251,9 @@ class ConstructionBOQLine(models.Model):
     _name = 'construction.boq.line'
     _description = 'BOQ Line Item'
     _order = 'sequence, id'
+    
+    # [FIX] Inherit analytic.mixin to provide 'analytic_precision' context required by the widget
+    _inherit = ['analytic.mixin'] 
 
     # Basic Information
     boq_id = fields.Many2one('construction.boq', string='BOQ Reference', required=True, ondelete='cascade', index=True)
@@ -269,12 +262,15 @@ class ConstructionBOQLine(models.Model):
         ('line_note', 'Note')
     ], default=False, help="Technical field for UX purpose.")
     
+    # [NEW] Link to Independent Section Model
+    section_id = fields.Many2one('construction.boq.section', string='Section')
+
     # Product Information
     product_id = fields.Many2one('product.product', string='Product',
         domain="[('company_id', 'in', (company_id, False))]")
     
     # Main Fields (shown in simple view)
-    name = fields.Char(string='Description', required=True, compute='_compute_name_from_product', store=True, readonly=False)
+    name = fields.Char(string='Description', required=True, compute='_compute_name', store=True, readonly=False)
     quantity = fields.Float(string='Budget Qty', default=1.0, required=True)
     estimated_rate = fields.Monetary(string='Budget Rate', currency_field='currency_id', default=0.0, required=True)
     budget_amount = fields.Monetary(string='Budget Amount', compute='_compute_budget_amount', currency_field='currency_id', store=True)
@@ -297,7 +293,6 @@ class ConstructionBOQLine(models.Model):
     
     company_id = fields.Many2one('res.company', related='boq_id.company_id', string='Company', store=True, readonly=True)
     
-    # FIX: Added store=True to create the column in the DB, allowing the SQL Report View to access it.
     currency_id = fields.Many2one('res.currency', related='company_id.currency_id', string='Currency', readonly=True, store=True)
     
     sequence = fields.Integer(string='Sequence', default=10)
@@ -305,6 +300,9 @@ class ConstructionBOQLine(models.Model):
     # Accounting Fields
     expense_account_id = fields.Many2one('account.account', string='Expense Account', check_company=True)
     analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
+    
+    # [FIX] Analytic Distribution is provided by analytic.mixin, but we can override attributes if needed.
+    # The Json definition here is compatible, but the mixin inheritance above is what fixes the KeyError.
     analytic_distribution = fields.Json(string='Analytic Distribution', help="Distribute costs across multiple analytic accounts.")
     
     # Consumption Tracking
@@ -319,22 +317,22 @@ class ConstructionBOQLine(models.Model):
     # Product Configuration Validation
     product_config_valid = fields.Boolean(string='Product Configured', compute='_compute_product_config_valid', store=False)
 
-    @api.depends('product_id')
-    def _compute_name_from_product(self):
-        """Auto-fill name from product if not set"""
+    @api.depends('product_id', 'section_id')
+    def _compute_name(self):
+        """Auto-fill name from product or section"""
         for rec in self:
-            if rec.product_id and not rec.name:
+            if rec.display_type == 'line_section' and rec.section_id:
+                rec.name = rec.section_id.name
+            elif rec.product_id and not rec.name:
                 rec.name = rec.product_id.name
 
     @api.depends('product_id')
     def _compute_product_config_valid(self):
-        """Check if product is properly configured"""
         for rec in self:
             if not rec.product_id:
                 rec.product_config_valid = False
                 continue
                 
-            # Check required configurations
             valid = True
             if not rec.product_id.uom_id:
                 valid = False
@@ -352,7 +350,6 @@ class ConstructionBOQLine(models.Model):
 
     @api.depends('quantity', 'budget_amount', 'consumption_ids.quantity', 'consumption_ids.amount')
     def _compute_consumption(self):
-        """Optimized: Single approach for all records with batch query"""
         for rec in self:
             rec.consumed_quantity = 0.0
             rec.consumed_amount = 0.0
@@ -400,43 +397,30 @@ class ConstructionBOQLine(models.Model):
 
     @api.onchange('product_id')
     def _onchange_product_id(self):
-        """Auto-fill fields from product and validate configuration"""
         if self.product_id:
-            # Auto-fill basic fields
             self.name = self.product_id.name
             self.description = self.product_id.description_sale or self.product_id.name
             self.uom_id = self.product_id.uom_id
             self.estimated_rate = self.product_id.standard_price
             
-            # Auto-fill accounting fields
             account = self.product_id.property_account_expense_id or self.product_id.categ_id.property_account_expense_categ_id
             if account:
                 self.expense_account_id = account
             
-            # Check product configuration
             if not self.product_id.uom_id:
-                return {
-                    'warning': {
-                        'title': _('Product Configuration Issue'),
-                        'message': _('Product "%s" has no Unit of Measure defined.') % self.product_id.name
-                    }
-                }
+                return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Unit of Measure defined.') % self.product_id.name}}
             
             if not self.product_id.standard_price:
-                return {
-                    'warning': {
-                        'title': _('Product Configuration Issue'),
-                        'message': _('Product "%s" has no Standard Price defined.') % self.product_id.name
-                    }
-                }
+                return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Standard Price defined.') % self.product_id.name}}
             
             if not self.product_id.property_account_expense_id and not self.product_id.categ_id.property_account_expense_categ_id:
-                return {
-                    'warning': {
-                        'title': _('Product Configuration Issue'),
-                        'message': _('Product "%s" has no Expense Account defined. Please configure it in product settings.') % self.product_id.name
-                    }
-                }
+                return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Expense Account defined.') % self.product_id.name}}
+
+    # [NEW] Onchange for Independent Section
+    @api.onchange('section_id')
+    def _onchange_section_id(self):
+        if self.section_id:
+            self.name = self.section_id.name
 
     @api.onchange('task_id')
     def _onchange_task_id(self):
@@ -445,22 +429,13 @@ class ConstructionBOQLine(models.Model):
 
     @api.constrains('product_id')
     def _check_product_configuration(self):
-        """Validate product configuration when creating/updating lines"""
         for rec in self.filtered(lambda r: r.product_id and r.display_type is False):
             if not rec.product_id.uom_id:
-                raise ValidationError(
-                    _('Product "%s" is not properly configured. Unit of Measure is missing.') % rec.product_id.name
-                )
-            
+                raise ValidationError(_('Product "%s" is not properly configured. Unit of Measure is missing.') % rec.product_id.name)
             if not rec.product_id.standard_price:
-                raise ValidationError(
-                    _('Product "%s" is not properly configured. Standard Price is missing.') % rec.product_id.name
-                )
-            
+                raise ValidationError(_('Product "%s" is not properly configured. Standard Price is missing.') % rec.product_id.name)
             if not rec.expense_account_id:
-                raise ValidationError(
-                    _('Product "%s" is not properly configured. Expense Account is missing.') % rec.product_id.name
-                )
+                raise ValidationError(_('Product "%s" is not properly configured. Expense Account is missing.') % rec.product_id.name)
 
     def check_consumption(self, qty, amount):
         self.ensure_one()
@@ -471,46 +446,29 @@ class ConstructionBOQLine(models.Model):
                  raise ValidationError(_('BOQ Budget Exceeded for %s.') % self.name)
 
     # -------------------------------------------------------------------------
-    # PROPAGATE VERSIONING FROM LINE CHANGES - OPTIMIZED
+    # PROPAGATE VERSIONING FROM LINE CHANGES
     # -------------------------------------------------------------------------
-    
     @api.model_create_multi
     def create(self, vals_list):
-        """Optimized: Batch processing of BOQ revisions"""
-        boq_ids = {
-            vals['boq_id'] for vals in vals_list
-            if vals.get('boq_id')
-        }
-        
+        boq_ids = {vals['boq_id'] for vals in vals_list if vals.get('boq_id')}
         if boq_ids and not self.env.context.get('revision_copy'):
             boqs = self.env['construction.boq'].browse(list(boq_ids))
-            boqs.filtered(
-                lambda b: b.state in ['submitted', 'approved', 'locked']
-            ).create_revision_snapshot()
+            boqs.filtered(lambda b: b.state in ['submitted', 'approved', 'locked']).create_revision_snapshot()
         return super(ConstructionBOQLine, self).create(vals_list)
 
     def write(self, vals):
-        """Optimized: Batch processing of BOQ revisions"""
         if not self.env.context.get('revision_copy'):
             boqs = self.mapped('boq_id')
-            boqs.filtered(
-                lambda b: b.state in ['submitted', 'approved', 'locked']
-            ).create_revision_snapshot()
-            
+            boqs.filtered(lambda b: b.state in ['submitted', 'approved', 'locked']).create_revision_snapshot()
         return super(ConstructionBOQLine, self).write(vals)
 
     def unlink(self):
-        """Optimized: Batch processing of BOQ revisions"""
         if not self.env.context.get('revision_copy'):
             boqs = self.mapped('boq_id')
-            boqs.filtered(
-                lambda b: b.state in ['submitted', 'approved', 'locked']
-            ).create_revision_snapshot()
-            
+            boqs.filtered(lambda b: b.state in ['submitted', 'approved', 'locked']).create_revision_snapshot()
         return super(ConstructionBOQLine, self).unlink()
 
     def action_open_advanced_view(self):
-        """Open advanced view for this line"""
         self.ensure_one()
         return {
             'name': _('Advanced BOQ Line'),
@@ -520,9 +478,7 @@ class ConstructionBOQLine(models.Model):
             'res_id': self.id,
             'views': [(False, 'form')],
             'target': 'new',
-            'context': {
-                'form_view_ref': 'entrpryz_construction_boq.view_construction_boq_line_advanced_form'
-            }
+            'context': {'form_view_ref': 'entrpryz_construction_boq.view_construction_boq_line_advanced_form'}
         }
 
     _sql_constraints = [
@@ -536,10 +492,7 @@ class ConstructionBOQConsumption(models.Model):
     _order = 'date desc, id desc'
 
     boq_line_id = fields.Many2one('construction.boq.line', string='BOQ Line', required=True, ondelete='restrict', index=True)
-    
-    # --- FIX START: Added company_id to support Record Rules ---
     company_id = fields.Many2one('res.company', related='boq_line_id.company_id', string='Company', store=True, readonly=True)
-    # --- FIX END ---
     
     source_model = fields.Char(string='Source Model', required=True)
     source_id = fields.Integer(string='Source ID', required=True)
@@ -553,7 +506,6 @@ class ConstructionBOQConsumption(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        """Optimized: Batch validation"""
         line_ids = {vals['boq_line_id'] for vals in vals_list if vals.get('boq_line_id')}
         lines = self.env['construction.boq.line'].browse(list(line_ids))
         line_map = {line.id: line for line in lines}
