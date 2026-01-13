@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- ./security/construction_security.xml -->
 <odoo>
     <data noupdate="1">
         <!-- All rules should use consistent field access patterns -->
