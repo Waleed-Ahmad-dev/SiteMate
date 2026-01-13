@@ -270,12 +270,8 @@ class ConstructionBOQLine(models.Model):
     product_id = fields.Many2one('product.product', string='Product',
         domain="[('company_id', 'in', (company_id, False))]")
     
-    # [FIXED] Removed compute='_compute_name' and store=True. 
-    # This prevents the 'Mandatory field not set' error when adding Notes/Sections or before a product is selected.
-    # We now rely on onchange methods to auto-fill this field.
     name = fields.Char(string='Description', required=True)
     
-    # [FIX] Removed required=True from these fields. They are enforced via python constraint only for non-section lines.
     quantity = fields.Float(string='Budget Qty', default=1.0)
     estimated_rate = fields.Monetary(string='Budget Rate', currency_field='currency_id', default=0.0)
     uom_id = fields.Many2one('uom.uom', string='Unit of Measure')
@@ -332,9 +328,6 @@ class ConstructionBOQLine(models.Model):
                      raise ValidationError(_('Unit of Measure is mandatory for BOQ line: %s') % rec.name)
                 if rec.quantity <= 0:
                      raise ValidationError(_('Quantity must be positive for BOQ line: %s') % rec.name)
-
-    # [FIXED] Deleted _compute_name method as it conflicts with required=True on save.
-    # Logic moved/relied upon in _onchange_product_id and _onchange_section_id.
 
     @api.depends('product_id')
     def _compute_product_config_valid(self):
@@ -445,14 +438,23 @@ class ConstructionBOQLine(models.Model):
         if self.task_id and self.task_id.activity_code:
             self.activity_code = self.task_id.activity_code
 
-    @api.constrains('product_id')
+    @api.constrains('product_id', 'expense_account_id')
     def _check_product_configuration(self):
+        """
+        FIX: Updated to allow fallback to product account if line account is missing.
+        """
         for rec in self.filtered(lambda r: r.product_id and r.display_type is False):
             if not rec.product_id.uom_id:
                 raise ValidationError(_('Product "%s" is not properly configured. Unit of Measure is missing.') % rec.product_id.name)
             if not rec.product_id.standard_price:
                 raise ValidationError(_('Product "%s" is not properly configured. Standard Price is missing.') % rec.product_id.name)
-            if not rec.expense_account_id:
+            
+            # [FIX] Check if account exists on line OR product before raising error
+            account = rec.expense_account_id or \
+                      rec.product_id.property_account_expense_id or \
+                      rec.product_id.categ_id.property_account_expense_categ_id
+                      
+            if not account:
                 raise ValidationError(_('Product "%s" is not properly configured. Expense Account is missing.') % rec.product_id.name)
 
     def check_consumption(self, qty, amount):
