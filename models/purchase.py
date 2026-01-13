@@ -38,8 +38,8 @@ class PurchaseOrderLine(models.Model):
         'construction.boq.line',
         string='BOQ Item',
         index=True,
-        # Dynamic domain: Must belong to the BOQ selected in the header
-        domain="[('boq_id', '=', parent.boq_id), ('boq_id.state', 'in', ('approved', 'locked'))]"
+        # [FIX] Added display_type = False to domain
+        domain="[('boq_id', '=', parent.boq_id), ('boq_id.state', 'in', ('approved', 'locked')), ('display_type', '=', False)]"
     )
 
     @api.onchange('boq_line_id')
@@ -64,13 +64,13 @@ class PurchaseOrderLine(models.Model):
         # Separate lines by purchase type and state for efficient processing
         boq_lines = self.filtered(
             lambda l: l.order_id.purchase_type == 'boq' and 
-                     l.state in ('draft', 'sent') and 
-                     l.boq_line_id
+                      l.state in ('draft', 'sent') and 
+                      l.boq_line_id
         )
         
         normal_lines = self.filtered(
             lambda l: l.order_id.purchase_type == 'boq' and 
-                     not l.boq_line_id
+                      not l.boq_line_id
         )
         
         # Check for lines without BOQ in BOQ purchase mode
