@@ -70,7 +70,9 @@ class ConstructionBOQ(models.Model):
     @api.depends('boq_line_ids.budget_amount', 'currency_id')
     def _compute_total_budget(self):
         for rec in self:
-            rec.total_budget = sum(rec.boq_line_ids.mapped('budget_amount'))
+            # [FIX] Only sum actual lines, ignore sections/notes to prevent type errors
+            lines = rec.boq_line_ids.filtered(lambda l: not l.display_type)
+            rec.total_budget = sum(lines.mapped('budget_amount'))
 
     @api.onchange('project_id')
     def _onchange_project_id(self):
@@ -79,9 +81,10 @@ class ConstructionBOQ(models.Model):
 
     # -- Workflow Actions --
     def action_submit(self):
-        boqs_without_lines = self.filtered(lambda r: not r.boq_line_ids)
-        if boqs_without_lines:
-            raise ValidationError(_('You cannot submit a BOQ with no lines.'))
+        # [FIX] Ensure we have actual product lines, not just sections
+        boqs_with_valid_lines = self.filtered(lambda r: r.boq_line_ids.filtered(lambda l: not l.display_type))
+        if len(boqs_with_valid_lines) != len(self):
+            raise ValidationError(_('You cannot submit a BOQ with no product lines.'))
         
         self.write({'state': 'submitted'})
 
@@ -252,7 +255,6 @@ class ConstructionBOQLine(models.Model):
     _description = 'BOQ Line Item'
     _order = 'sequence, id'
     
-    # [FIX] Inherit analytic.mixin to provide 'analytic_precision' context required by the widget
     _inherit = ['analytic.mixin'] 
 
     # Basic Information
@@ -262,21 +264,24 @@ class ConstructionBOQLine(models.Model):
         ('line_note', 'Note')
     ], default=False, help="Technical field for UX purpose.")
     
-    # [NEW] Link to Independent Section Model
     section_id = fields.Many2one('construction.boq.section', string='Section')
 
     # Product Information
     product_id = fields.Many2one('product.product', string='Product',
         domain="[('company_id', 'in', (company_id, False))]")
     
-    # Main Fields (shown in simple view)
+    # Main Fields
     name = fields.Char(string='Description', required=True, compute='_compute_name', store=True, readonly=False)
-    quantity = fields.Float(string='Budget Qty', default=1.0, required=True)
-    estimated_rate = fields.Monetary(string='Budget Rate', currency_field='currency_id', default=0.0, required=True)
+    
+    # [FIX] Removed required=True from these fields. They are enforced via python constraint only for non-section lines.
+    quantity = fields.Float(string='Budget Qty', default=1.0)
+    estimated_rate = fields.Monetary(string='Budget Rate', currency_field='currency_id', default=0.0)
+    uom_id = fields.Many2one('uom.uom', string='Unit of Measure')
+    
     budget_amount = fields.Monetary(string='Budget Amount', compute='_compute_budget_amount', currency_field='currency_id', store=True)
     remaining_amount = fields.Monetary(string='Available Budget', compute='_compute_consumption', currency_field='currency_id', store=True)
     
-    # Technical Fields (hidden in simple view, shown in advanced)
+    # Technical Fields
     description = fields.Text(string='Long Description')
     cost_type = fields.Selection([
         ('material', 'Material'),
@@ -285,8 +290,6 @@ class ConstructionBOQLine(models.Model):
         ('service', 'Service'),
         ('overhead', 'Overhead')
     ], string='Cost Type', default='material', help="Classifies the type of cost for reporting and analysis.")
-    
-    uom_id = fields.Many2one('uom.uom', string='Unit of Measure', required=True)
     
     task_id = fields.Many2one('project.task', string='Task', domain="[('project_id', '=', parent.project_id)]")
     activity_code = fields.Char(string='Activity Code', help="Code used to link this BOQ line to a specific project task or schedule activity.")
@@ -301,8 +304,6 @@ class ConstructionBOQLine(models.Model):
     expense_account_id = fields.Many2one('account.account', string='Expense Account', check_company=True)
     analytic_account_id = fields.Many2one('account.analytic.account', related='boq_id.analytic_account_id', string='Analytic Account', store=True)
     
-    # [FIX] Analytic Distribution is provided by analytic.mixin, but we can override attributes if needed.
-    # The Json definition here is compatible, but the mixin inheritance above is what fixes the KeyError.
     analytic_distribution = fields.Json(string='Analytic Distribution', help="Distribute costs across multiple analytic accounts.")
     
     # Consumption Tracking
@@ -316,6 +317,19 @@ class ConstructionBOQLine(models.Model):
     
     # Product Configuration Validation
     product_config_valid = fields.Boolean(string='Product Configured', compute='_compute_product_config_valid', store=False)
+
+    # [FIX] New Constraint to ensure data integrity for actual lines vs sections
+    @api.constrains('display_type', 'product_id', 'uom_id', 'quantity')
+    def _check_line_requirements(self):
+        for rec in self:
+            if not rec.display_type:
+                # If it's a real line (not a section/note)
+                if not rec.product_id:
+                     raise ValidationError(_('Product is mandatory for BOQ lines that are not Sections/Notes.'))
+                if not rec.uom_id:
+                     raise ValidationError(_('Unit of Measure is mandatory for BOQ line: %s') % rec.name)
+                if rec.quantity <= 0:
+                     raise ValidationError(_('Quantity must be positive for BOQ line: %s') % rec.name)
 
     @api.depends('product_id', 'section_id')
     def _compute_name(self):
@@ -351,16 +365,25 @@ class ConstructionBOQLine(models.Model):
     @api.depends('quantity', 'budget_amount', 'consumption_ids.quantity', 'consumption_ids.amount')
     def _compute_consumption(self):
         for rec in self:
+            # [FIX] Sections/Notes have no consumption
+            if rec.display_type:
+                rec.consumed_quantity = 0.0
+                rec.consumed_amount = 0.0
+                rec.remaining_quantity = 0.0
+                rec.remaining_amount = 0.0
+                continue
+
             rec.consumed_quantity = 0.0
             rec.consumed_amount = 0.0
             rec.remaining_quantity = rec.quantity
             rec.remaining_amount = rec.budget_amount
         
+        # Filter out sections and new records from batch calculation
         new_records = self.filtered(lambda r: not isinstance(r.id, int))
-        real_records = self - new_records
+        real_records = self.filtered(lambda r: isinstance(r.id, int) and not r.display_type)
         
         for rec in new_records:
-            if rec.consumption_ids:
+            if not rec.display_type and rec.consumption_ids:
                 c_qty = sum(rec.consumption_ids.mapped('quantity'))
                 c_amt = sum(rec.consumption_ids.mapped('amount'))
                 rec.consumed_quantity = c_qty
@@ -416,7 +439,6 @@ class ConstructionBOQLine(models.Model):
             if not self.product_id.property_account_expense_id and not self.product_id.categ_id.property_account_expense_categ_id:
                 return {'warning': {'title': _('Product Configuration Issue'), 'message': _('Product "%s" has no Expense Account defined.') % self.product_id.name}}
 
-    # [NEW] Onchange for Independent Section
     @api.onchange('section_id')
     def _onchange_section_id(self):
         if self.section_id:
@@ -439,6 +461,10 @@ class ConstructionBOQLine(models.Model):
 
     def check_consumption(self, qty, amount):
         self.ensure_one()
+        # [FIX] Bypass consumption check for sections/notes
+        if self.display_type:
+            return
+
         if not self.allow_over_consumption:
             if qty > self.remaining_quantity + 0.0001:
                  raise ValidationError(_('BOQ Quantity Exceeded for %s.') % self.name)
@@ -481,46 +507,45 @@ class ConstructionBOQLine(models.Model):
             'context': {'form_view_ref': 'entrpryz_construction_boq.view_construction_boq_line_advanced_form'}
         }
 
-    _sql_constraints = [
-        ('chk_qty_positive', 'CHECK(quantity > 0)', 'Quantity must be positive.'),
-        ('chk_amount_positive', 'CHECK(budget_amount >= 0)', 'Budget amount cannot be negative.'),
-    ]
-
-class ConstructionBOQConsumption(models.Model):
-    _name = 'construction.boq.consumption'
-    _description = 'BOQ Consumption Ledger'
-    _order = 'date desc, id desc'
-
-    boq_line_id = fields.Many2one('construction.boq.line', string='BOQ Line', required=True, ondelete='restrict', index=True)
-    company_id = fields.Many2one('res.company', related='boq_line_id.company_id', string='Company', store=True, readonly=True)
+    class ConstructionBOQConsumption(models.Model):
+        _name = 'construction.boq.consumption'
+        _description = 'BOQ Consumption Ledger'
+        _order = 'date desc, id desc'
     
-    source_model = fields.Char(string='Source Model', required=True)
-    source_id = fields.Integer(string='Source ID', required=True)
-    
-    quantity = fields.Float(string='Quantity Consumed')
-    amount = fields.Monetary(string='Amount Consumed', currency_field='currency_id')
-    currency_id = fields.Many2one('res.currency', related='boq_line_id.currency_id', store=True)
-    
-    date = fields.Date(string='Date', default=fields.Date.context_today, required=True)
-    user_id = fields.Many2one('res.users', string='User', default=lambda self: self.env.user)
-
-    @api.model_create_multi
-    def create(self, vals_list):
-        line_ids = {vals['boq_line_id'] for vals in vals_list if vals.get('boq_line_id')}
-        lines = self.env['construction.boq.line'].browse(list(line_ids))
-        line_map = {line.id: line for line in lines}
+        boq_line_id = fields.Many2one('construction.boq.line', string='BOQ Line', required=True, ondelete='restrict', index=True)
+        company_id = fields.Many2one('res.company', related='boq_line_id.company_id', string='Company', store=True, readonly=True)
         
-        for vals in vals_list:
-            line_id = vals.get('boq_line_id')
-            if line_id and line_id in line_map:
-                line = line_map[line_id]
-                qty = vals.get('quantity', 0.0)
-                amt = vals.get('amount', 0.0)
-                if qty > 0 or amt > 0:
-                    line.check_consumption(qty, amt)
-        return super(ConstructionBOQConsumption, self).create(vals_list)
+        source_model = fields.Char(string='Source Model', required=True)
+        source_id = fields.Integer(string='Source ID', required=True)
+        
+        quantity = fields.Float(string='Quantity Consumed')
+        amount = fields.Monetary(string='Amount Consumed', currency_field='currency_id')
+        currency_id = fields.Many2one('res.currency', related='boq_line_id.currency_id', store=True)
+        
+        date = fields.Date(string='Date', default=fields.Date.context_today, required=True)
+        user_id = fields.Many2one('res.users', string='User', default=lambda self: self.env.user)
+    
+        @api.model_create_multi
+        def create(self, vals_list):
+            line_ids = {vals['boq_line_id'] for vals in vals_list if vals.get('boq_line_id')}
+            lines = self.env['construction.boq.line'].browse(list(line_ids))
+            line_map = {line.id: line for line in lines}
+            
+            for vals in vals_list:
+                line_id = vals.get('boq_line_id')
+                if line_id and line_id in line_map:
+                    line = line_map[line_id]
+                    # [FIX] Do not process consumption for Sections
+                    if line.display_type:
+                         raise ValidationError(_("Cannot record consumption on a Section/Note BOQ line."))
 
-    def init(self):
-        self.env.cr.execute("""
-            REVOKE UPDATE, DELETE ON construction_boq_consumption FROM PUBLIC;
-        """)
+                    qty = vals.get('quantity', 0.0)
+                    amt = vals.get('amount', 0.0)
+                    if qty > 0 or amt > 0:
+                        line.check_consumption(qty, amt)
+            return super(ConstructionBOQConsumption, self).create(vals_list)
+    
+        def init(self):
+            self.env.cr.execute("""
+                REVOKE UPDATE, DELETE ON construction_boq_consumption FROM PUBLIC;
+            """)
