@@ -50,7 +50,7 @@
                     <notebook>
                         <page string="Budget Lines" name="lines">
                             <field name="boq_line_ids" widget="section_and_note_one2many" readonly="state == 'closed'">
-                                <list decoration-danger="remaining_amount &lt; 0" decoration-warning="remaining_amount &lt; (budget_amount * 0.1)">
+                                <list editable="bottom" decoration-danger="remaining_amount &lt; 0" decoration-warning="remaining_amount &lt; (budget_amount * 0.1)">
                                     <control>
                                         <create name="add_line_control" string="Add a line"/>
                                         <create name="add_section_control" string="Add a section" context="{'default_display_type': 'line_section'}"/>
