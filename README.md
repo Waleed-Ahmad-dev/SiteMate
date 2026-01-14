@@ -1,188 +1,133 @@
-# Entrpryz Construction BOQ Module
+# Entrpryz Construction BOQ
 
-## 1. Overview
+**Version**: 1.0  
+**Author**: Waleed Ahmad (Shadow Scripter)  
+**License**: LGPL-3  
+**Category**: Construction  
 
-The **Entrpryz Construction BOQ** (Bill of Quantities) module is a robust Odoo 18 application designed to streamline the financial management of construction projects. It enables construction companies, contractors, and project managers to create detailed budget estimations, track revisions through a rigorous approval workflow, and monitor actual consumption against planned budgets in real-time.
+## Overview
 
-By bridging the gap between Project Management (`project`) and Accounting (`stock_account`, `account`), this module ensures that every material cost, labor hour, and overhead expense is accounted for and linked to specific analytic accounts.
+**Entrpryz Construction BOQ** is a comprehensive Odoo module designed to manage the Bill of Quantities (BOQ) for construction projects. It provides end-to-end control over project budgets, material estimation, and actual consumption through tight integration with Odoo's Project, Purchase, Inventory, and Accounting modules.
 
----
+This module allows construction companies to:
+- Create detailed Bill of Quantities with multi-level structures.
+- Enforce strict budget controls during purchasing and inventory issuance.
+- Track real-time consumption and "Budget vs. Actual" variances.
+- Manage revisions and version history for BOQ evolutions.
 
-## 2. Key Features
+## Key Features
 
-### 🏗️ Project-Centric Design
+### 🏗️ BOQ Management
+-   **Structure**: Organize BOQs by Project and Analytic Account.
+-   **Line Items**: Support for Sections, Notes, and Product Lines.
+-   **Cost Types**: Classify costs as Material, Labor, Subcontract, Service, or Overhead.
+-   **Workflow**: Robust state machine (Draft → Submitted → Approved → Locked → Closed).
+-   **Approvals**: Role-based approval workflow with validation gates (e.g., cannot approve without lines).
 
-- **Direct Integration**: Every BOQ is strictly linked to an Odoo `Project` and an `Analytic Account`, ensuring financial integrity.
-- **One Active BOQ Policy**: To prevent conflicting budgets, the system enforces a strict rule where only _one_ BOQ can be in an "Approved" or "Locked" state per project.
-- **Task Linkage**: BOQ lines can be mapped to specific Project Tasks, allowing granular tracking of costs per activity using `activity_code`.
+### 🔄 Versioning & Revisions
+-   **Snapshots**: Automatic creation of immutable snapshots (v1, v2, etc.) upon major revisions.
+-   **Audit Trail**: Track who approved revisions, when, and why.
+-   **History View**: dedicated view to browse past versions of a BOQ for a specific project.
+-   **Comparison**: Active vs. Previous version tracking.
 
-### 🔄 Advanced Versioning & History (Copy-on-Write)
+### 💰 Budget Control
+-   **Estimation**: Define Budget Quantity and Budget Rate per line item.
+-   **Validation**: Prevent submission/approval of incomplete BOQs.
+-   **Total Budget**: Real-time computation of the total project budget based on active lines.
 
-- **Automatic Snapshots**: The module utilizes a "Copy-on-Write" mechanism. If a locked or submitted BOQ needs modification, the system automatically:
-  1. Archives the current version as a snapshot.
-  2. Increments the version number (e.g., v1 → v2).
-  3. Creates an audit trail linking the revisions.
-- **Manual Revisions**: Users can explicitly trigger a "Revise Manually" action to create a new version snapshot on demand.
-- **Revision History**: Users can view the full history of a BOQ, comparing previous snapshots with the current active version to see exactly what changed and why.
+### 🛒 Purchase Integration
+-   **BOQ Purchase Mode**: New "Purchase Mode" on Purchase Orders to differentiate project purchases from regular stock replenishment.
+-   **Line Linking**: Direct linking of Purchase Order Lines to specific BOQ Items.
+-   **Budget enforcement**: Automatic validation to ensure PO quantities do not exceed BOQ remaining quantities.
+-   **Project Alignment**: strict validation to ensure PO Project matches the BOQ Project.
 
-### 💰 Comprehensive Budgeting & Reporting
+### 📦 Inventory & Consumption
+-   **Stock Moves**: Link Stock Moves (Delivery/Production outcomes) to BOQ Lines.
+-   **Valuation Override**: Automatically route stock valuation to the BOQ Line's configured Expense Account instead of default category accounts.
+-   **Consumption Ledger**: Comprehensive ledger (`construction.boq.consumption`) tracking every material consumption event.
+-   **Over-Consumption Protection**: Optional strict blocking of stock moves that exceed budget limits.
 
-- **Hierarchical BOQ**: Organize costs using **Sections** (e.g., "Substructure", "Superstructure") and **Notes** for better readability.
-- **Multi-Cost Types**: Categorize expenses into:
-  - `Material`: Tangible goods.
-  - `Labor`: Manpower costs.
-  - `Subcontract`: Outsourced work.
-  - `Service`: Professional services.
-  - `Overhead`: Indirect costs.
-- **Currency Support**: Full multi-currency support inherited from the parent Company settings.
+### 📊 Project Integration
+-   **Activity Codes**: Map BOQ lines to Project Tasks via unique Activity Codes.
+-   **Analytic Distribution**: Automated propagation of Analytic Accounts to Journal Entries and Stock Moves.
 
-### 📊 Consumption & Variance Tracking
+## Installation
 
-- **Planned vs. Actual**: Each line item tracks:
-  - **Budget Amount**: Quantity × Estimated Rate.
-  - **Consumed Amount**: Actuals tracked via integration (e.g., Purchase Orders).
-  - **Remaining Amount**: Visual indicators turn red when over budget.
-- **Visual Progress**: Integrated progress bars (`consumption_percentage`) show real-time burn rate for each line item.
-- **Over-Consumption Control**: Optional strict enforcement to prevent exceeding budgeted quantities without explicit manager approval.
+### Dependencies
+This module requires the following Odoo Community/Enterprise modules:
+-   `base`
+-   `project`
+-   `purchase`
+-   `stock`
+-   `stock_account`
+-   `account`
+-   `mail`
+-   `analytic`
 
-### 🛡️ Security & Access Control
+### Configuration
+1.  **Analytic Accounts**: Ensure your Projects have Analytic Accounts configured, as the BOQ relies on them for cost tracking.
+2.  **Product Setup**: Products used in BOQ lines **must** have:
+    -   A valid Unit of Measure.
+    -   A Standard Price (for budget estimation defaults).
+    -   An Expense Account (or Category Expense Account).
+3.  **User Access**: Ensure relevant users have access to Construction/Project, Purchase, and Inventory apps.
 
-- **Multi-Company**: Fully supports multi-company environments with record rules ensuring users only see BOQs for their allowed companies.
-- **Role-Based Access**:
-  - `User`: Can create and view BOQs.
-  - `Manager`: Can approve, lock, and unlock BOQs.
-  - `Finance Head`: Can authorize over-consumption.
+## Usage Workflow
 
----
+### 1. Create a BOQ
+1.  Navigate to **Construction > BOQs**.
+2.  Click **New**.
+3.  Select a **Project** (Analytic Account auto-fills).
+4.  Add **BOQ Lines**:
+    -   Use "Add Section" to organize items (e.g., "Foundation", "Electrical").
+    -   Add Products, set **Budget Qty** and **Budget Rate**.
+5.  **Submit** the BOQ for review.
+6.  **Approve** the BOQ to make it active.
 
-## 3. Technical Architecture
+### 2. Purchasing Materials
+1.  Create a **Purchase Order**.
+2.  Set **Purchase Mode** to "BOQ Purchase".
+3.  Select the **Project** and the active **BOQ**.
+4.  Add Products. In the order line, select the specific **BOQ Item**.
+    -   *Note: Only BOQ lines matching the product will appear.*
+5.  Confirm Order. Odoo checks if the requested quantity allows for the remaining budget.
 
-### 3.1. File Structure
+### 3. Consuming Materials (Stock)
+1.  Process the **Delivery/Receipt** associated with the User/Project.
+2.  On the Stock Move, ensure the **BOQ Line** is linked (auto-linked from PO).
+3.  **Validate** the transfer.
+    -   The system validates if `Consumed Qty + New Qty <= Budget Qty`.
+    -   If valid, a **Consumption Record** is created.
+    -   Accounting entries are generated with the correct Analytic Distribution and Expense Account.
 
-```bash
-entrpryz_construction_boq/
-├── models/
-│   ├── boq.py              # Core logic: Header, Line, Section, Consumption
-│   ├── boq_revision.py     # Audit mechanism for version history
-│   ├── boq_report.py       # Reporting engines
-│   └── ...                 # Extended standard models
-├── views/
-│   ├── boq_views.xml       # Form, Tree, and Search views for BOQ & Sections
-│   ├── boq_report_views.xml # Pivot and Graph views
-│   └── ...
-├── security/
-│   ├── construction_security.xml # Record rules and access groups
-│   └── ir.model.access.csv       # ACL definitions
-├── __manifest__.py         # Module metadata and dependencies
-└── README.md
-```
+### 4. Revising a BOQ
+1.  Open an **Approved** or **Locked** BOQ.
+2.  Click **Revise**.
+3.  The system archives the current version (e.g., v1) as a read-only snapshot.
+4.  The current record becomes a **Draft** (v2) ready for editing.
+5.  Modify lines/quantities and re-submit for approval.
 
-### 3.2. Data Models
+## Technical Architecture
 
-| Model                          | Description      | Key Capabilities                                                 |
-| :----------------------------- | :--------------- | :--------------------------------------------------------------- |
-| `construction.boq`             | The BOQ Header.  | Versioning engine, Workflow state machine.                       |
-| `construction.boq.line`        | Detail lines.    | Budget calculation, UI Progress Bars (`consumption_percentage`). |
-| `construction.boq.section`     | Sections.        | Organization of lines, Company-specific.                         |
-| `construction.boq.consumption` | Ledger.          | Stores actual consumption logs (date, user, qty, amount).        |
-| `construction.boq.revision`    | Cross-reference. | Links an "Original" (archived) BOQ to a "New" (active) BOQ.      |
+### Core Models
+| Model | Description |
+| :--- | :--- |
+| `construction.boq` | Header model containing project link, versioning, and total budget. |
+| `construction.boq.line` | Detail lines (products/sections). Holds the core logic for consumption and remaining budget. |
+| `construction.boq.consumption` | A ledger table recording every instance of consumption (source: Stock Move). |
+| `construction.boq.revision` | Junction table tracking the relationship between an Original BOQ and its New Version. |
 
----
+### Inherited Models
+-   **`purchase.order`**: Added `purchase_type` and `boq_id`.
+-   **`purchase.order.line`**: Added `boq_line_id` and budget partial constraints.
+-   **`stock.move`**: Added `boq_line_id` and logic overlaps for `_action_done` and `_get_dest_account`.
+-   **`project.task`**: Added `activity_code` for mapping tasks to costs.
 
-## 4. Installation & Configuration
+## Troubleshooting
 
-### 4.1. Prerequisites
-
-Ensure the following Odoo Community/Enterprise modules are installed:
-
-- `project`
-- `stock_account`
-- `purchase`
-
-### 4.2. Installation Steps
-
-1. Clone this repository into your Odoo `addons` path.
-2. Restart the Odoo service.
-3. Log in as Administrator.
-4. Go to **Apps**, search for `Entrpryz Construction BOQ`, and click **Activate**.
-
-### 4.3. Post-Installation Configuration
-
-1. **User Groups**: Go to _Settings > Users & Companies > Users_. Assign the "Construction / Manager" group to users who need approval rights.
-2. **Analytic Accounts**: Ensure your Projects have valid Analytic Accounts configured, as the BOQ relies on them for cost allocation.
-3. **BOQ Sections**: Go to _Construction > Configuration > BOQ Sections_ to pre-define common sections (e.g., "Civil", "MEP", "Finishing") for standardization across projects.
-
----
-
-## 5. User Guide
-
-### 5.1. Creating a Bill of Quantities
-
-1. Navigate to **Construction > BOQs**.
-2. Click **New**.
-3. **Project Scope**:
-    - Select the **Project**.
-    - The **Analytic Account** will auto-fill from the project.
-4. **Control & Versioning**:
-    - **Version**: Automatically tracked (starts at 1).
-    - **Previous Version**: Link to the predecessor if applicable.
-5. Save to create a Draft.
-
-### 5.2. Defining the Budget (Lines)
-
-1. **Add Sections**: Break down the project (e.g., "Phase 1: Civil Works").
-2. **Add Lines**:
-    - **Product**: Select a product to auto-fill UoM and Cost.
-    - **Description**: Enter a clear description (e.g. "Concrete M25 Grade").
-    - **Cost Type**: Crucial for reporting (Material/Labor/etc.).
-    - **Estimation**: Enter Quantity and Rate.
-    - **Budget Amount**: Calculated automatically.
-3. **Detailed View**: Click the line to open the detailed form view, which shows:
-    - **Efficiency**: Visual progress bar.
-    - **Consumption Logs**: Detailed history of actual spending.
-4. **Expense Account**: Ensure the correct GL account is set.
-
-### 5.3. Approval Workflow
-
-1. **Submit**: When ready, click **Submit for Approval**. The status changes to `Submitted`.
-2. **Approve**: A manager reviews the budget.
-    - If valid, they click `Approve`.
-    - _Constraint_: You cannot approve if another BOQ for this project is already active.
-    - _Locking_: Once approved, the BOQ lines become read-only to preserve the budget baseline.
-3. **Lock**: Finalizes the budget, making it read-only.
-4. **Revise**:
-    - **Auto-Revision**: Edit a locked BOQ and save. The system prompts a version upgrade.
-    - **Manual Revision**: Click **Revise Manually** to force a new version snapshot immediately.
-
-### 5.4. Tracking Consumption
-
-Consumption is typically recorded automatically via Purchase Orders or Stock Picking if configured.
-
-- **Visual Indicators**:
-  - **Progress Bars**: Show % of budget consumed per line.
-  - **Red Text**: Indicates "Remaining Amount" is negative (over budget).
-  - **Amber Text**: Warns when "Remaining Amount" is low (<10% budget left).
-- **Manual Entry**: You can manually add entries to the `consumption_ids` table in the form view if needed.
+-   **"Product Configuration Warning"**: The selected product is missing a price, UoM, or Expense Account. Fix the product master data.
+-   **"BOQ Quantity Exceeded"**: You are trying to purchase or consume more than the budgeted amount. Either increase the budget (Revise BOQ) or check the "Allow Over Consumption" flag on the BOQ Line.
+-   **"Expense Account is missing"**: The system cannot determine where to book the cost. Set an expense account on the Product or its Category.
 
 ---
-
-## 6. Troubleshooting
-
-- **Error: "BOQ Line analytic account must match..."**
-  - _Fix_: Ensure the Project's analytic account matches the one set on the BOQ lines. If you changed the Project, re-save to update lines.
-- **Error: "An active BOQ with this version already exists..."**
-  - _Fix_: You might have manually duplicated a BOQ without archiving the old one. Archive the old version first.
-- **Cannot Delete Line**:
-  - _Reason_: If the BOQ is linked to actual consumption records, Odoo prevents deletion to maintain audit integrity. Archive the line instead or reverse consumption.
-
-## 7. Support
-
-**Author**: Waleed Ahmad (Shadow Scripter)
-**Website**: [Check out my portfolio](https://www.shadowscripter.online)
-**License**: LGPL-3
-
----
-
-## 8. License
-
-This module is distributed under the [LGPL-3](https://www.gnu.org/licenses/lgpl-3.0.en.html) license.
+*Built with ❤️ for Odoo.*
