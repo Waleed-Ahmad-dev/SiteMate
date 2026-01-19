@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from odoo import models, fields, api, _
+from odoo import models, fields, api, _, Command
 from odoo.exceptions import ValidationError
 from collections import defaultdict
 
@@ -27,6 +27,49 @@ class PurchaseOrder(models.Model):
         if self.purchase_type == 'normal':
             self.project_id = False
             self.boq_id = False
+            # Optional: Clear lines if switching modes to prevent data inconsistency
+            self.order_line = [Command.clear()]
+
+    @api.onchange('boq_id')
+    def _onchange_boq_id_auto_populate(self):
+        """
+        [FIX] Automatically populate PO Lines when a BOQ is selected.
+        """
+        if not self.boq_id or self.purchase_type != 'boq':
+            return
+
+        # 1. Clear existing lines to prevent duplicates or mix-ups
+        new_lines = [Command.clear()]
+
+        # 2. Iterate through BOQ lines
+        for boq_line in self.boq_id.boq_line_ids:
+            # Skip Sections and Notes
+            if boq_line.display_type:
+                continue
+            
+            # Skip items that are fully consumed (Optional UX choice, keeps PO clean)
+            # If you want to include them with 0 qty, remove the 'if' check below.
+            if boq_line.remaining_quantity <= 0 and not boq_line.allow_over_consumption:
+                continue
+
+            # 3. Prepare PO Line values
+            line_vals = {
+                'product_id': boq_line.product_id.id,
+                'name': boq_line.name or boq_line.product_id.name,
+                'product_qty': boq_line.remaining_quantity, # Default to remaining budget
+                'product_uom': boq_line.uom_id.id,
+                'price_unit': boq_line.estimated_rate,
+                'boq_line_id': boq_line.id,
+                'date_planned': fields.Datetime.now(),
+                # Propagate Analytics
+                'analytic_distribution': boq_line.analytic_distribution,
+                # Taxes (Standard Odoo behavior to fetch from product if not specified)
+                'taxes_id': [(6, 0, boq_line.product_id.supplier_taxes_id.ids)],
+            }
+            new_lines.append(Command.create(line_vals))
+
+        # 4. Update the order_line One2many
+        self.order_line = new_lines
 
     @api.constrains('project_id', 'boq_id', 'purchase_type')
     def _check_boq_project_match(self):
@@ -127,11 +170,13 @@ class PurchaseOrderLine(models.Model):
         if boq_lines:
             boq_line_ids = boq_lines.mapped('boq_line_id.id')
             
-            # Use read_group to fetch remaining quantities in bulk
+            # [FIX] Error: Invalid field 'boq_id.project_id' on model 'construction.boq.line'
+            # search_read cannot traverse relations in the fields list (e.g. boq_id.project_id).
+            # We must use 'project_id' directly, as it exists on the line model (as a related field).
             boq_data = self.env['construction.boq.line'].search_read(
                 [('id', 'in', boq_line_ids)],
                 ['id', 'remaining_quantity', 'allow_over_consumption', 
-                 'name', 'boq_id', 'boq_id.project_id']
+                 'name', 'boq_id', 'project_id'] 
             )
             
             # Create lookup dictionaries for O(1) access
@@ -149,10 +194,12 @@ class PurchaseOrderLine(models.Model):
                     continue
                 
                 # Check project alignment for all lines at once
+                # Note: boq_info['project_id'] returns (ID, Name) tuple in search_read
                 project_mismatch_lines = [
                     line for line in lines 
                     if (line.order_id.project_id and 
-                        boq_info['boq_id'][0] != line.order_id.project_id.id)
+                        boq_info['project_id'] and 
+                        boq_info['project_id'][0] != line.order_id.project_id.id)
                 ]
                 
                 if project_mismatch_lines:
