@@ -30,7 +30,7 @@
                     optional="show"
                     column_invisible="parent.purchase_type == 'normal'"
                     required="parent.purchase_type == 'boq'"
-                    domain="[('boq_id', '=', parent.boq_id)]"
+                    domain="[('boq_id', '=', parent.boq_id), ('display_type', '=', False)]"
                     options="{'no_create': True}"
                 />
             </xpath>
