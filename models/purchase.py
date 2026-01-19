@@ -29,6 +29,14 @@ class PurchaseOrder(models.Model):
             self.project_id = False
             self.boq_id = False
 
+    # [FIX] Scenario 3.1: Constraint on Header to catch Project changes
+    @api.constrains('project_id', 'boq_id', 'purchase_type')
+    def _check_boq_project_match(self):
+        for order in self:
+            if order.purchase_type == 'boq' and order.project_id and order.boq_id:
+                if order.boq_id.project_id != order.project_id:
+                    raise ValidationError(_("The selected BOQ does not belong to the selected Project."))
+
 
 class PurchaseOrderLine(models.Model):
     _inherit = 'purchase.order.line'
@@ -44,18 +52,25 @@ class PurchaseOrderLine(models.Model):
 
     @api.onchange('boq_line_id')
     def _onchange_boq_line_id(self):
-        # Use mapping to avoid multiple if checks
-        field_mapping = {
-            'product_id': 'product_id',
-            'product_uom': 'uom_id',
-            'analytic_distribution': 'analytic_distribution'
-        }
+        if not self.boq_line_id:
+            return
+
+        # [FIX] Issue 1: Fields weren't populating. 
+        # Explicitly map Product, Name, UoM, and Price.
         
-        if self.boq_line_id:
-            for line_field, boq_field in field_mapping.items():
-                boq_value = getattr(self.boq_line_id, boq_field, False)
-                if boq_value and not getattr(self, line_field, False):
-                    setattr(self, line_field, boq_value)
+        # 1. Set Product 
+        # (Setting this might trigger standard Odoo onchanges, but we force values below to be sure)
+        if self.boq_line_id.product_id:
+            self.product_id = self.boq_line_id.product_id
+
+        # 2. Map explicit BOQ data
+        self.name = self.boq_line_id.name  # Description
+        self.product_uom = self.boq_line_id.uom_id
+        self.price_unit = self.boq_line_id.estimated_rate  # Price
+        
+        # 3. Analytics
+        if self.boq_line_id.analytic_distribution:
+            self.analytic_distribution = self.boq_line_id.analytic_distribution
 
     @api.constrains('product_qty', 'boq_line_id', 'order_id')
     def _check_boq_limit(self):
@@ -105,6 +120,7 @@ class PurchaseOrderLine(models.Model):
                     continue
                 
                 # Check project alignment for all lines at once
+                # Note: This checks Line consistency. The Header constraint checks Header consistency.
                 project_mismatch_lines = [
                     line for line in lines 
                     if (line.order_id.project_id and 
