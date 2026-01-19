@@ -48,7 +48,6 @@ class PurchaseOrder(models.Model):
                 continue
             
             # Skip items that are fully consumed (Optional UX choice, keeps PO clean)
-            # If you want to include them with 0 qty, remove the 'if' check below.
             if boq_line.remaining_quantity <= 0 and not boq_line.allow_over_consumption:
                 continue
 
@@ -90,6 +89,26 @@ class PurchaseOrderLine(models.Model):
         # [FIX] Domain filters items belonging to the selected BOQ in the Header
         domain="[('boq_id', '=', parent.boq_id), ('boq_id.state', 'in', ('approved', 'locked')), ('display_type', '=', False)]"
     )
+
+    # -------------------------------------------------------------------------
+    # [NEW] PREPARE INVOICE LINE (Replaces AccountMoveLine.create override)
+    # -------------------------------------------------------------------------
+    def _prepare_account_move_line(self, move=False):
+        """
+        Prepare the dict of values to create the new account.move.line record.
+        This ensures BOQ data flows to the Vendor Bill automatically.
+        """
+        res = super(PurchaseOrderLine, self)._prepare_account_move_line(move)
+        
+        # Propagate BOQ Line ID
+        if self.boq_line_id:
+            res['boq_line_id'] = self.boq_line_id.id
+            
+            # Propagate Analytics if not already set by standard Odoo flow
+            if self.boq_line_id.analytic_distribution and not res.get('analytic_distribution'):
+                res['analytic_distribution'] = self.boq_line_id.analytic_distribution
+                
+        return res
 
     # -------------------------------------------------------------------------
     # [FIX] NEW LOGIC: Auto-select BOQ Line when Product is selected
@@ -171,7 +190,7 @@ class PurchaseOrderLine(models.Model):
             boq_line_ids = boq_lines.mapped('boq_line_id.id')
             
             # [FIX] Error: Invalid field 'boq_id.project_id' on model 'construction.boq.line'
-            # search_read cannot traverse relations in the fields list (e.g. boq_id.project_id).
+            # search_read cannot traverse relations in the fields list.
             # We must use 'project_id' directly, as it exists on the line model (as a related field).
             boq_data = self.env['construction.boq.line'].search_read(
                 [('id', 'in', boq_line_ids)],
