@@ -71,9 +71,7 @@ class AccountMove(models.Model):
             else:
                 amount_to_consume = line.price_subtotal * sign
             
-            # Validate Limits - batch validation would be better but depends on implementation
-            # We check positive consumption against remaining budget.
-            # Refunds (negative) are generally allowed as they free up budget.
+            # Validate Limits
             if sign > 0:
                 line.boq_line_id.check_consumption(qty_to_consume, amount_to_consume)
             
@@ -107,46 +105,8 @@ class AccountMoveLine(models.Model):
         help="Link this invoice line to a BOQ line for cost tracking."
     )
 
-    @api.model_create_multi
-    def create(self, vals_list):
-        """
-        Override create to automatically pull the BOQ Line from the linked Purchase Order Line.
-        This ensures that when 'Create Bill' is clicked on a PO, the BOQ reference is preserved.
-        """
-        # Collect purchase line IDs that need boq_line_id resolution
-        purchase_line_ids = []
-        purchase_line_map = {}
-        
-        for i, vals in enumerate(vals_list):
-            if vals.get('purchase_line_id') and not vals.get('boq_line_id'):
-                purchase_line_ids.append(vals['purchase_line_id'])
-                purchase_line_map[i] = vals['purchase_line_id']
-        
-        # Bulk fetch purchase order lines with their BOQ lines
-        if purchase_line_ids:
-            po_lines = self.env['purchase.order.line'].browse(purchase_line_ids)
-            
-            # FIX APPLIED HERE:
-            # We cannot use read() to fetch 'boq_line_id.analytic_distribution' directly from PO Line.
-            # Instead, we browse the records and iterate. Odoo's prefetching makes this efficient.
-            po_line_info = {}
-            for line in po_lines:
-                po_line_info[line.id] = {
-                    'boq_line_id': line.boq_line_id.id if line.boq_line_id else False,
-                    # Access the related field via the object, not via read string
-                    'analytic_distribution': line.boq_line_id.analytic_distribution if line.boq_line_id else False
-                }
-            
-            # Apply the BOQ line information
-            for i, purchase_line_id in purchase_line_map.items():
-                info = po_line_info.get(purchase_line_id)
-                if info and info['boq_line_id']:
-                    vals_list[i]['boq_line_id'] = info['boq_line_id']
-                    # Subtask 4.1: Propagate Analytics to Bills (Create)
-                    if info['analytic_distribution'] and not vals_list[i].get('analytic_distribution'):
-                        vals_list[i]['analytic_distribution'] = info['analytic_distribution']
-        
-        return super(AccountMoveLine, self).create(vals_list)
+    # REMOVED: @api.model_create_multi def create(self, vals_list)
+    # The logic is moved to PurchaseOrderLine._prepare_account_move_line in models/purchase.py
 
     @api.onchange('purchase_line_id')
     def _onchange_purchase_line_id_boq(self):
