@@ -125,15 +125,16 @@ class AccountMoveLine(models.Model):
         # Bulk fetch purchase order lines with their BOQ lines
         if purchase_line_ids:
             po_lines = self.env['purchase.order.line'].browse(purchase_line_ids)
-            # Use read() to fetch specific fields efficiently
-            po_line_data = po_lines.read(['id', 'boq_line_id', 'boq_line_id.analytic_distribution'])
             
-            # Create mapping for quick lookup
+            # FIX APPLIED HERE:
+            # We cannot use read() to fetch 'boq_line_id.analytic_distribution' directly from PO Line.
+            # Instead, we browse the records and iterate. Odoo's prefetching makes this efficient.
             po_line_info = {}
-            for data in po_line_data:
-                po_line_info[data['id']] = {
-                    'boq_line_id': data['boq_line_id'][0] if data['boq_line_id'] else False,
-                    'analytic_distribution': data.get('boq_line_id.analytic_distribution', False)
+            for line in po_lines:
+                po_line_info[line.id] = {
+                    'boq_line_id': line.boq_line_id.id if line.boq_line_id else False,
+                    # Access the related field via the object, not via read string
+                    'analytic_distribution': line.boq_line_id.analytic_distribution if line.boq_line_id else False
                 }
             
             # Apply the BOQ line information
