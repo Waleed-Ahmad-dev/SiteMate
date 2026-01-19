@@ -46,7 +46,7 @@ class PurchaseOrderLine(models.Model):
         'construction.boq.line',
         string='BOQ Item',
         index=True,
-        # [FIX] Added display_type = False to domain
+        # [FIX] Added display_type = False to domain (Python side backup)
         domain="[('boq_id', '=', parent.boq_id), ('boq_id.state', 'in', ('approved', 'locked')), ('display_type', '=', False)]"
     )
 
@@ -55,18 +55,22 @@ class PurchaseOrderLine(models.Model):
         if not self.boq_line_id:
             return
 
-        # [FIX] Issue 1: Fields weren't populating. 
-        # Explicitly map Product, Name, UoM, and Price.
-        
-        # 1. Set Product 
-        # (Setting this might trigger standard Odoo onchanges, but we force values below to be sure)
+        # [FIX] Guard Clause: If a Section or Note is somehow selected, do nothing
+        if self.boq_line_id.display_type:
+            return
+
+        # 1. Set Product
+        # Setting product_id usually triggers Odoo's internal onchange which resets names/prices.
+        # We set it first.
         if self.boq_line_id.product_id:
             self.product_id = self.boq_line_id.product_id
 
-        # 2. Map explicit BOQ data
-        self.name = self.boq_line_id.name  # Description
-        self.product_uom = self.boq_line_id.uom_id
-        self.price_unit = self.boq_line_id.estimated_rate  # Price
+        # 2. Map explicit BOQ data (FORCE OVERWRITE)
+        # We perform this AFTER setting product_id to ensure BOQ descriptions/prices take priority
+        # over standard product catalog data.
+        self.name = self.boq_line_id.name  # Description from BOQ
+        self.product_uom = self.boq_line_id.uom_id  # UoM from BOQ
+        self.price_unit = self.boq_line_id.estimated_rate  # Price from BOQ
         
         # 3. Analytics
         if self.boq_line_id.analytic_distribution:
@@ -120,7 +124,6 @@ class PurchaseOrderLine(models.Model):
                     continue
                 
                 # Check project alignment for all lines at once
-                # Note: This checks Line consistency. The Header constraint checks Header consistency.
                 project_mismatch_lines = [
                     line for line in lines 
                     if (line.order_id.project_id and 
