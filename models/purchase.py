@@ -3,7 +3,6 @@ from odoo import models, fields, api, _
 from odoo.exceptions import ValidationError
 from collections import defaultdict
 
-
 class PurchaseOrder(models.Model):
     _inherit = 'purchase.order'
 
@@ -19,7 +18,7 @@ class PurchaseOrder(models.Model):
     boq_id = fields.Many2one(
         'construction.boq', 
         string='BOQ Reference', 
-        domain="[('project_id', '=', project_id), ('state', 'in', ['approved', 'locked'])]"
+        domain="[('project_id', '=', project_id), ('state', 'in', ('approved', 'locked'))]"
     )
 
     @api.onchange('purchase_type')
@@ -29,7 +28,6 @@ class PurchaseOrder(models.Model):
             self.project_id = False
             self.boq_id = False
 
-    # [FIX] Scenario 3.1: Constraint on Header to catch Project changes
     @api.constrains('project_id', 'boq_id', 'purchase_type')
     def _check_boq_project_match(self):
         for order in self:
@@ -46,10 +44,41 @@ class PurchaseOrderLine(models.Model):
         'construction.boq.line',
         string='BOQ Item',
         index=True,
-        # [FIX] Added display_type = False to domain (Python side backup)
+        # [FIX] Domain filters items belonging to the selected BOQ in the Header
         domain="[('boq_id', '=', parent.boq_id), ('boq_id.state', 'in', ('approved', 'locked')), ('display_type', '=', False)]"
     )
 
+    # -------------------------------------------------------------------------
+    # [FIX] NEW LOGIC: Auto-select BOQ Line when Product is selected
+    # -------------------------------------------------------------------------
+    @api.onchange('product_id')
+    def _onchange_product_id_auto_select_boq(self):
+        """
+        When a Product is selected, automatically find the matching BOQ Line 
+        from the BOQ selected in the Purchase Order Header.
+        """
+        if not self.product_id or self.order_id.purchase_type != 'boq' or not self.order_id.boq_id:
+            return
+
+        # Prevent loop if the BOQ line is already set and matches the product
+        if self.boq_line_id and self.boq_line_id.product_id == self.product_id:
+            return
+
+        # Search for the BOQ line in the header's BOQ that matches this product
+        matching_boq_line = self.env['construction.boq.line'].search([
+            ('boq_id', '=', self.order_id.boq_id.id),
+            ('product_id', '=', self.product_id.id),
+            ('display_type', '=', False)
+        ], limit=1)
+
+        if matching_boq_line:
+            self.boq_line_id = matching_boq_line.id
+            # Manually trigger the BOQ Line onchange to pull description, rates, analytics
+            self._onchange_boq_line_id()
+
+    # -------------------------------------------------------------------------
+    # Existing Logic: Auto-fill Product when BOQ Line is selected
+    # -------------------------------------------------------------------------
     @api.onchange('boq_line_id')
     def _onchange_boq_line_id(self):
         if not self.boq_line_id:
@@ -59,15 +88,11 @@ class PurchaseOrderLine(models.Model):
         if self.boq_line_id.display_type:
             return
 
-        # 1. Set Product
-        # Setting product_id usually triggers Odoo's internal onchange which resets names/prices.
-        # We set it first.
-        if self.boq_line_id.product_id:
+        # 1. Set Product (Only if different, to avoid recursion loop)
+        if self.boq_line_id.product_id and self.product_id != self.boq_line_id.product_id:
             self.product_id = self.boq_line_id.product_id
 
         # 2. Map explicit BOQ data (FORCE OVERWRITE)
-        # We perform this AFTER setting product_id to ensure BOQ descriptions/prices take priority
-        # over standard product catalog data.
         self.name = self.boq_line_id.name  # Description from BOQ
         self.product_uom = self.boq_line_id.uom_id  # UoM from BOQ
         self.price_unit = self.boq_line_id.estimated_rate  # Price from BOQ
