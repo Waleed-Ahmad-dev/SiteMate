@@ -5,8 +5,10 @@
         <field name="model">sale.order.template</field>
         <field name="inherit_id" ref="sale_management.sale_order_template_view_form"/>
         <field name="arch" type="xml">
-            <xpath expr="//header" position="inside">
-                <button name="action_create_boq" string="Create BOQ" type="object" class="oe_highlight"/>
+            <xpath expr="//sheet" position="before">
+                <header>
+                    <button name="action_create_boq" string="Create BOQ" type="object" class="oe_highlight"/>
+                </header>
             </xpath>
         </field>
     </record>
