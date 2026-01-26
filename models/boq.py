@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import re
-from odoo import models, fields, api, _
+from odoo import models, fields, api, _, Command
 from odoo.exceptions import ValidationError, UserError
 
 class ConstructionBOQ(models.Model):
@@ -17,6 +17,13 @@ class ConstructionBOQ(models.Model):
     analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', required=True, tracking=True, help="Select the analytic account for cost tracking and budget analysis.")
     company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
     
+    # -- [NEW] Quotation Template Import --
+    quotation_template_id = fields.Many2one(
+        'sale.order.template', 
+        string='Import From Template', 
+        help="Select a Quotation Template to auto-populate BOQ Lines."
+    )
+
     # -- Versioning Fields --
     version = fields.Integer(string='Version', default=1, required=True, readonly=True, copy=False, help="Version number of the BOQ, incremented on revision.")
     previous_boq_id = fields.Many2one('construction.boq', string='Previous Version', readonly=True, copy=False)
@@ -39,6 +46,51 @@ class ConstructionBOQ(models.Model):
     revision_ids = fields.One2many('construction.boq.revision', 'original_boq_id', string='Revisions (Technical)', copy=False)
     
     display_revision_ids = fields.Many2many('construction.boq.revision', compute='_compute_display_revision_ids', string='Revision History')
+
+    # -------------------------------------------------------------------------
+    # [NEW] QUOTATION TEMPLATE LOGIC
+    # -------------------------------------------------------------------------
+    @api.onchange('quotation_template_id')
+    def _onchange_quotation_template_id(self):
+        """
+        Import lines from the selected Quotation Template into the BOQ.
+        """
+        if not self.quotation_template_id:
+            return
+
+        # Optional: Clear existing lines? 
+        # For now, we append. If you want to clear, uncomment the next line:
+        # self.boq_line_ids = [Command.clear()]
+
+        new_lines = []
+        for template_line in self.quotation_template_id.sale_order_template_line_ids:
+            data = {
+                'display_type': template_line.display_type,
+                'name': template_line.name,
+                'sequence': template_line.sequence,
+            }
+
+            if not template_line.display_type:
+                # It is a product line
+                product = template_line.product_id
+                
+                # Determine Expense Account
+                expense_account = product.property_account_expense_id or \
+                                  product.categ_id.property_account_expense_categ_id
+                
+                data.update({
+                    'product_id': product.id,
+                    'quantity': template_line.product_uom_qty,
+                    'uom_id': template_line.product_uom_id.id,
+                    # IMPORTANT: BOQ uses Cost (Standard Price), not Sales Price
+                    'estimated_rate': product.standard_price, 
+                    'expense_account_id': expense_account.id if expense_account else False,
+                })
+            
+            new_lines.append(Command.create(data))
+        
+        # Add new lines to the existing list
+        self.boq_line_ids = new_lines
 
     @api.depends('project_id', 'revision_ids')
     def _compute_display_revision_ids(self):
@@ -180,9 +232,10 @@ class ConstructionBOQ(models.Model):
             return super(ConstructionBOQ, self).write(vals)
         
         ignore_fields = [
-            'message_follower_ids', 'state', 'approval_date', 'approved_by',
-            'active', 'total_budget', 'previous_boq_id', 'revision_ids',
-            'display_revision_ids', 'write_date', 'write_uid', 'name'
+            'message_follower_ids', 'state', 'approval_date', 'approved_by', 
+            'active', 'total_budget', 'previous_boq_id', 'revision_ids', 
+            'display_revision_ids', 'write_date', 'write_uid', 'name',
+            'quotation_template_id' # Don't version just for changing the dropdown
         ]
         
         has_business_changes = any(f not in ignore_fields for f in vals)
@@ -246,7 +299,7 @@ class ConstructionBOQ(models.Model):
         if existing_boqs:
             project_names = existing_boqs.mapped('project_id.name')
             raise ValidationError(
-                _('There is already an active (Approved or Locked) BOQ for project(s): %s. Please revise the existing one.') %
+                _('There is already an active (Approved or Locked) BOQ for project(s): %s. Please revise the existing one.') % 
                 ', '.join(project_names)
             )
 
@@ -271,7 +324,7 @@ class ConstructionBOQLine(models.Model):
     section_id = fields.Many2one('construction.boq.section', string='Section')
 
     # Product Information
-    product_id = fields.Many2one('product.product', string='Product',
+    product_id = fields.Many2one('product.product', string='Product', 
         domain="[('company_id', 'in', (company_id, False))]")
     
     name = fields.Char(string='Description', required=True)
