@@ -7,8 +7,15 @@
     'author': 'Waleed Ahmad (Shadow Scripter)',
     'website': 'https://www.shadowscripter.online',
     'depends': [
-        'base', 'project', 'purchase', 'stock', 'stock_account',
-        'account', 'mail', 'analytic'
+        'base', 
+        'project', 
+        'purchase', 
+        'stock', 
+        'stock_account',
+        'account', 
+        'mail', 
+        'analytic',
+        'sale_management'
     ],
     'data': [
         'security/security.xml',
