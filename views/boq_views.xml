@@ -44,6 +44,10 @@
                             <field name="approval_date"/>
                             <field name="approved_by" widget="many2one_avatar_user"/>
                             <field name="currency_id" invisible="1"/>
+                            <field name="quotation_template_id" 
+                                   options="{'no_create': True}" 
+                                   invisible="state != 'draft'"
+                                   placeholder="Auto-fill from Quotation Template"/>
                         </group>
                     </group>
 
@@ -168,6 +172,7 @@
                 <field name="name"/>
                 <field name="project_id"/>
                 <field name="analytic_account_id"/>
+                <field name="quotation_template_id"/>
                 <filter string="My BOQs" name="my_boqs" domain="[('create_uid', '=', uid)]"/>
                 <separator/>
                 <filter string="Draft" name="draft" domain="[('state', '=', 'draft')]"/>
