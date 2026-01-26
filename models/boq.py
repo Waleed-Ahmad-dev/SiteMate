@@ -50,20 +50,13 @@ class ConstructionBOQ(models.Model):
     # -------------------------------------------------------------------------
     # [NEW] QUOTATION TEMPLATE LOGIC
     # -------------------------------------------------------------------------
-    @api.onchange('quotation_template_id')
-    def _onchange_quotation_template_id(self):
+    def _get_lines_from_template(self, template):
         """
-        Import lines from the selected Quotation Template into the BOQ.
+        Helper method to map Sale Order Template Lines to BOQ Lines (Command.create).
+        Used by both default_get (Initial Load) and onchange (User Selection).
         """
-        if not self.quotation_template_id:
-            return
-
-        # Optional: Clear existing lines? 
-        # For now, we append. If you want to clear, uncomment the next line:
-        # self.boq_line_ids = [Command.clear()]
-
         new_lines = []
-        for template_line in self.quotation_template_id.sale_order_template_line_ids:
+        for template_line in template.sale_order_template_line_ids:
             data = {
                 'display_type': template_line.display_type,
                 'name': template_line.name,
@@ -88,6 +81,37 @@ class ConstructionBOQ(models.Model):
                 })
             
             new_lines.append(Command.create(data))
+        return new_lines
+
+    @api.model
+    def default_get(self, fields_list):
+        """
+        Override default_get to pre-populate BOQ lines if a quotation_template_id
+        is passed in the context (e.g., from the 'Export to BOQ' button).
+        """
+        res = super(ConstructionBOQ, self).default_get(fields_list)
+        
+        # Check if we have a template ID in the defaults
+        template_id = res.get('quotation_template_id')
+        if template_id:
+            template = self.env['sale.order.template'].browse(template_id)
+            if template:
+                # Generate the line commands
+                lines = self._get_lines_from_template(template)
+                res['boq_line_ids'] = lines
+        
+        return res
+
+    @api.onchange('quotation_template_id')
+    def _onchange_quotation_template_id(self):
+        """
+        Import lines from the selected Quotation Template into the BOQ.
+        """
+        if not self.quotation_template_id:
+            return
+
+        # Generate new lines using the helper
+        new_lines = self._get_lines_from_template(self.quotation_template_id)
         
         # Add new lines to the existing list
         self.boq_line_ids = new_lines
