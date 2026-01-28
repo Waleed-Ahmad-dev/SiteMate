@@ -124,8 +124,10 @@ class ConstructionBOQ(models.Model):
         # Generate new lines using the helper
         new_lines = self._get_lines_from_template(self.quotation_template_id)
         
-        # Add new lines to the existing list
-        self.boq_line_ids = new_lines
+        # [FIX] We must CLEAR existing lines before adding new ones.
+        # Without Command.clear(), Odoo appends the new lines to the lines 
+        # that might have been added by default_get, causing duplicates.
+        self.boq_line_ids = [Command.clear()] + new_lines
 
     @api.depends('project_id', 'revision_ids')
     def _compute_display_revision_ids(self):
@@ -416,11 +418,11 @@ class ConstructionBOQLine(models.Model):
             if not rec.display_type:
                 # If it's a real line (not a section/note)
                 if not rec.product_id:
-                       raise ValidationError(_('Product is mandatory for BOQ lines that are not Sections/Notes.'))
+                        raise ValidationError(_('Product is mandatory for BOQ lines that are not Sections/Notes.'))
                 if not rec.uom_id:
-                       raise ValidationError(_('Unit of Measure is mandatory for BOQ line: %s') % rec.name)
+                        raise ValidationError(_('Unit of Measure is mandatory for BOQ line: %s') % rec.name)
                 if rec.quantity <= 0:
-                       raise ValidationError(_('Quantity must be positive for BOQ line: %s') % rec.name)
+                        raise ValidationError(_('Quantity must be positive for BOQ line: %s') % rec.name)
 
     @api.depends('product_id')
     def _compute_product_config_valid(self):
@@ -661,7 +663,7 @@ class ConstructionBOQConsumption(models.Model):
                 line = line_map[line_id]
                 # [FIX] Do not process consumption for Sections
                 if line.display_type:
-                      raise ValidationError(_("Cannot record consumption on a Section/Note BOQ line."))
+                       raise ValidationError(_("Cannot record consumption on a Section/Note BOQ line."))
 
                 qty = vals.get('quantity', 0.0)
                 amt = vals.get('amount', 0.0)
