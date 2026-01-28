@@ -57,9 +57,20 @@ class ConstructionBOQ(models.Model):
         """
         new_lines = []
         for template_line in template.sale_order_template_line_ids:
+            
+            # [FIX] Ensure 'name' is never False, as BOQ Line requires it.
+            # Use template line description, fallback to product name, fallback to generic string.
+            line_name = template_line.name
+            if not line_name and template_line.product_id:
+                line_name = template_line.product_id.display_name or template_line.product_id.name
+            
+            # Final fallback to avoid crash if both are missing (unlikely)
+            if not line_name:
+                line_name = "New Item"
+
             data = {
                 'display_type': template_line.display_type,
-                'name': template_line.name,
+                'name': line_name,
                 'sequence': template_line.sequence,
             }
 
@@ -405,11 +416,11 @@ class ConstructionBOQLine(models.Model):
             if not rec.display_type:
                 # If it's a real line (not a section/note)
                 if not rec.product_id:
-                      raise ValidationError(_('Product is mandatory for BOQ lines that are not Sections/Notes.'))
+                       raise ValidationError(_('Product is mandatory for BOQ lines that are not Sections/Notes.'))
                 if not rec.uom_id:
-                      raise ValidationError(_('Unit of Measure is mandatory for BOQ line: %s') % rec.name)
+                       raise ValidationError(_('Unit of Measure is mandatory for BOQ line: %s') % rec.name)
                 if rec.quantity <= 0:
-                      raise ValidationError(_('Quantity must be positive for BOQ line: %s') % rec.name)
+                       raise ValidationError(_('Quantity must be positive for BOQ line: %s') % rec.name)
 
     @api.depends('product_id')
     def _compute_product_config_valid(self):
