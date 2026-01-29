@@ -21,6 +21,23 @@ class PurchaseOrder(models.Model):
         domain="[('project_id', '=', project_id), ('state', 'in', ('approved', 'locked'))]"
     )
 
+    # [FIX] New Computed Field to allow Domain filtering in XML
+    # This fixes the "Invalid composed field" error in the view
+    boq_product_ids = fields.Many2many(
+        'product.product', 
+        compute='_compute_boq_product_ids', 
+        string="Allowed BOQ Products"
+    )
+
+    @api.depends('boq_id.boq_line_ids.product_id')
+    def _compute_boq_product_ids(self):
+        for rec in self:
+            if rec.boq_id:
+                # Get all products linked to the valid BOQ lines (ignoring sections)
+                rec.boq_product_ids = rec.boq_id.boq_line_ids.filtered(lambda l: not l.display_type).product_id
+            else:
+                rec.boq_product_ids = False
+
     @api.onchange('purchase_type')
     def _onchange_purchase_type(self):
         """Clear fields if switching back to normal"""
@@ -33,7 +50,7 @@ class PurchaseOrder(models.Model):
     @api.onchange('boq_id')
     def _onchange_boq_id_clean_lines(self):
         """
-        [UPDATED] When a BOQ is selected, we DO NOT populate lines automatically.
+        When a BOQ is selected, we DO NOT populate lines automatically.
         We only clear existing lines to ensure the user starts fresh and manually
         selects only what they need to buy.
         """
@@ -59,7 +76,7 @@ class PurchaseOrderLine(models.Model):
         'construction.boq.line',
         string='BOQ Item',
         index=True,
-        # [FIX] Domain filters items belonging to the selected BOQ in the Header
+        # Domain filters items belonging to the selected BOQ in the Header
         domain="[('boq_id', '=', parent.boq_id), ('boq_id.state', 'in', ('approved', 'locked')), ('display_type', '=', False)]"
     )
 
@@ -84,7 +101,7 @@ class PurchaseOrderLine(models.Model):
         return res
 
     # -------------------------------------------------------------------------
-    # [FIX] NEW LOGIC: Auto-select BOQ Line when Product is selected
+    # NEW LOGIC: Auto-select BOQ Line when Product is selected
     # -------------------------------------------------------------------------
     @api.onchange('product_id')
     def _onchange_product_id_auto_select_boq(self):
@@ -125,7 +142,7 @@ class PurchaseOrderLine(models.Model):
         if not self.boq_line_id:
             return
 
-        # [FIX] Guard Clause: If a Section or Note is somehow selected, do nothing
+        # Guard Clause: If a Section or Note is somehow selected, do nothing
         if self.boq_line_id.display_type:
             return
 
@@ -168,7 +185,6 @@ class PurchaseOrderLine(models.Model):
         if boq_lines:
             boq_line_ids = boq_lines.mapped('boq_line_id.id')
             
-            # [FIX] Error: Invalid field 'boq_id.project_id' on model 'construction.boq.line'
             # search_read cannot traverse relations in the fields list.
             # We must use 'project_id' directly, as it exists on the line model (as a related field).
             boq_data = self.env['construction.boq.line'].search_read(
