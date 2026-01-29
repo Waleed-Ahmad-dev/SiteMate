@@ -19,6 +19,12 @@ class SaleOrder(models.Model):
         """
         self.ensure_one()
         
+        # [FIX] In Odoo 18, sale.order does not have 'analytic_account_id'.
+        # We must fetch the analytic account from the related Project.
+        analytic_account_id = False
+        if self.project_id and self.project_id.account_id:
+            analytic_account_id = self.project_id.account_id.id
+
         return {
             'type': 'ir.actions.act_window',
             'name': _('Create BOQ'),
@@ -28,7 +34,7 @@ class SaleOrder(models.Model):
             'context': {
                 'default_sale_order_id': self.id,
                 'default_project_id': self.project_id.id if self.project_id else False,
-                'default_analytic_account_id': self.analytic_account_id.id if self.analytic_account_id else False,
+                'default_analytic_account_id': analytic_account_id,
                 'default_company_id': self.company_id.id,
                 'default_name': f"{self.name} - BOQ",
             }
