@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_order_form_inherit_boq" model="ir.ui.view">
+        <field name="name">sale.order.form.inherit.boq</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.view_order_form"/>
+        <field name="arch" type="xml">
+            
+            <div name="button_box" position="inside">
+                <button name="action_view_boq" type="object" class="oe_stat_button" icon="fa-list-alt" invisible="boq_count == 0">
+                    <field name="boq_count" widget="statinfo" string="BOQs"/>
+                </button>
+            </div>
+            
+            <header position="inside">
+                <button name="action_create_boq" string="Create BOQ" type="object" class="oe_highlight"
+                    invisible="state not in ('sale', 'done')"/>
+            </header>
+
+        </field>
+    </record>
+</odoo>
