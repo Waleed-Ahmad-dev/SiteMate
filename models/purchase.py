@@ -31,44 +31,17 @@ class PurchaseOrder(models.Model):
             self.order_line = [Command.clear()]
 
     @api.onchange('boq_id')
-    def _onchange_boq_id_auto_populate(self):
+    def _onchange_boq_id_clean_lines(self):
         """
-        [FIX] Automatically populate PO Lines when a BOQ is selected.
+        [UPDATED] When a BOQ is selected, we DO NOT populate lines automatically.
+        We only clear existing lines to ensure the user starts fresh and manually
+        selects only what they need to buy.
         """
         if not self.boq_id or self.purchase_type != 'boq':
             return
 
         # 1. Clear existing lines to prevent duplicates or mix-ups
-        new_lines = [Command.clear()]
-
-        # 2. Iterate through BOQ lines
-        for boq_line in self.boq_id.boq_line_ids:
-            # Skip Sections and Notes
-            if boq_line.display_type:
-                continue
-            
-            # Skip items that are fully consumed (Optional UX choice, keeps PO clean)
-            if boq_line.remaining_quantity <= 0 and not boq_line.allow_over_consumption:
-                continue
-
-            # 3. Prepare PO Line values
-            line_vals = {
-                'product_id': boq_line.product_id.id,
-                'name': boq_line.name or boq_line.product_id.name,
-                'product_qty': boq_line.remaining_quantity, # Default to remaining budget
-                'product_uom': boq_line.uom_id.id,
-                'price_unit': boq_line.estimated_rate,
-                'boq_line_id': boq_line.id,
-                'date_planned': fields.Datetime.now(),
-                # Propagate Analytics
-                'analytic_distribution': boq_line.analytic_distribution,
-                # Taxes (Standard Odoo behavior to fetch from product if not specified)
-                'taxes_id': [(6, 0, boq_line.product_id.supplier_taxes_id.ids)],
-            }
-            new_lines.append(Command.create(line_vals))
-
-        # 4. Update the order_line One2many
-        self.order_line = new_lines
+        self.order_line = [Command.clear()]
 
     @api.constrains('project_id', 'boq_id', 'purchase_type')
     def _check_boq_project_match(self):
@@ -137,6 +110,12 @@ class PurchaseOrderLine(models.Model):
             self.boq_line_id = matching_boq_line.id
             # Manually trigger the BOQ Line onchange to pull description, rates, analytics
             self._onchange_boq_line_id()
+        else:
+            # If product is not in BOQ, warn the user (Optional)
+            return {'warning': {
+                'title': _("Product Not in BOQ"),
+                'message': _("The selected product is not part of the selected BOQ.")
+            }}
 
     # -------------------------------------------------------------------------
     # Existing Logic: Auto-fill Product when BOQ Line is selected
@@ -230,13 +209,14 @@ class PurchaseOrderLine(models.Model):
                 if not boq_info['allow_over_consumption']:
                     remaining_qty = boq_info['remaining_quantity']
                     
-                    # Check each line's quantity against the same remaining quantity
-                    for line in lines:
-                        if line.product_qty > remaining_qty:
-                            raise ValidationError(
-                                _('Purchase Quantity (%s) exceeds BOQ Remaining Quantity (%s) for item %s.') % (
-                                    line.product_qty,
-                                    remaining_qty,
-                                    boq_info['name']
-                                )
+                    # Calculate total quantity being purchased in this order for this specific BOQ line
+                    total_purchase_qty = sum(line.product_qty for line in lines)
+                    
+                    if total_purchase_qty > remaining_qty:
+                        raise ValidationError(
+                            _('Total Purchase Quantity (%s) exceeds BOQ Remaining Quantity (%s) for item %s.') % (
+                                total_purchase_qty,
+                                remaining_qty,
+                                boq_info['name']
                             )
+                        )
