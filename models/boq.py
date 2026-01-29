@@ -17,11 +17,11 @@ class ConstructionBOQ(models.Model):
     analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account', required=True, tracking=True, help="Select the analytic account for cost tracking and budget analysis.")
     company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
     
-    # -- [NEW] Quotation Template Import --
-    quotation_template_id = fields.Many2one(
-        'sale.order.template', 
-        string='Import From Template', 
-        help="Select a Quotation Template to auto-populate BOQ Lines."
+    # -- [NEW] Sale Order Integration --
+    sale_order_id = fields.Many2one(
+        'sale.order', 
+        string='Source Sale Order', 
+        help="The confirmed Sales Order that generated this BOQ."
     )
 
     # -- Versioning Fields --
@@ -48,86 +48,63 @@ class ConstructionBOQ(models.Model):
     display_revision_ids = fields.Many2many('construction.boq.revision', compute='_compute_display_revision_ids', string='Revision History')
 
     # -------------------------------------------------------------------------
-    # [NEW] QUOTATION TEMPLATE LOGIC
+    # [NEW] SALE ORDER IMPORT LOGIC
     # -------------------------------------------------------------------------
-    def _get_lines_from_template(self, template):
+    def _get_lines_from_sale_order(self, order):
         """
-        Helper method to map Sale Order Template Lines to BOQ Lines (Command.create).
-        Used by both default_get (Initial Load) and onchange (User Selection).
+        Helper method to map Sale Order Lines to BOQ Lines (Command.create).
         """
         new_lines = []
-        for template_line in template.sale_order_template_line_ids:
-            
-            # [FIX] Ensure 'name' is never False, as BOQ Line requires it.
-            # Use template line description, fallback to product name, fallback to generic string.
-            line_name = template_line.name
-            if not line_name and template_line.product_id:
-                line_name = template_line.product_id.display_name or template_line.product_id.name
-            
-            # Final fallback to avoid crash if both are missing (unlikely)
-            if not line_name:
-                line_name = "New Item"
+        for line in order.order_line:
+            # Handle Section/Notes
+            if line.display_type:
+                data = {
+                    'display_type': 'line_section' if line.display_type == 'line_section' else 'line_note',
+                    'name': line.name,
+                    'sequence': line.sequence,
+                }
+                new_lines.append(Command.create(data))
+                continue
 
+            # Handle Product Lines
+            product = line.product_id
+            
+            # Determine Expense Account (Fallback logic)
+            expense_account = product.property_account_expense_id or \
+                              product.categ_id.property_account_expense_categ_id
+            
             data = {
-                'display_type': template_line.display_type,
-                'name': line_name,
-                'sequence': template_line.sequence,
+                'product_id': product.id,
+                'name': line.name or product.name,
+                'quantity': line.product_uom_qty,
+                'uom_id': line.product_uom.id,
+                # IMPORTANT: BOQ uses Cost (Standard Price), NOT Sales Price
+                'estimated_rate': product.standard_price, 
+                'expense_account_id': expense_account.id if expense_account else False,
+                'sequence': line.sequence,
             }
-
-            if not template_line.display_type:
-                # It is a product line
-                product = template_line.product_id
-                
-                # Determine Expense Account
-                expense_account = product.property_account_expense_id or \
-                                  product.categ_id.property_account_expense_categ_id
-                
-                data.update({
-                    'product_id': product.id,
-                    'quantity': template_line.product_uom_qty,
-                    'uom_id': template_line.product_uom_id.id,
-                    # IMPORTANT: BOQ uses Cost (Standard Price), not Sales Price
-                    'estimated_rate': product.standard_price, 
-                    'expense_account_id': expense_account.id if expense_account else False,
-                })
-            
             new_lines.append(Command.create(data))
         return new_lines
 
     @api.model
     def default_get(self, fields_list):
         """
-        Override default_get to pre-populate BOQ lines if a quotation_template_id
-        is passed in the context (e.g., from the 'Export to BOQ' button).
+        Override default_get to pre-populate BOQ lines if a sale_order_id
+        is passed in the context (from the 'Create BOQ' button on SO).
         """
         res = super(ConstructionBOQ, self).default_get(fields_list)
         
-        # Check if we have a template ID in the defaults
-        template_id = res.get('quotation_template_id')
-        if template_id:
-            template = self.env['sale.order.template'].browse(template_id)
-            if template:
+        # Check if we have a Sale Order ID in the defaults
+        sale_order_id = res.get('sale_order_id') or self.env.context.get('default_sale_order_id')
+        
+        if sale_order_id:
+            order = self.env['sale.order'].browse(sale_order_id)
+            if order:
                 # Generate the line commands
-                lines = self._get_lines_from_template(template)
+                lines = self._get_lines_from_sale_order(order)
                 res['boq_line_ids'] = lines
         
         return res
-
-    @api.onchange('quotation_template_id')
-    def _onchange_quotation_template_id(self):
-        """
-        Import lines from the selected Quotation Template into the BOQ.
-        """
-        if not self.quotation_template_id:
-            return
-
-        # Generate new lines using the helper
-        new_lines = self._get_lines_from_template(self.quotation_template_id)
-        
-        # [FIX] We must CLEAR existing lines before adding new ones.
-        # Without Command.clear(), Odoo appends the new lines to the lines 
-        # that might have been added by default_get, causing duplicates.
-        self.boq_line_ids = [Command.clear()] + new_lines
 
     @api.depends('project_id', 'revision_ids')
     def _compute_display_revision_ids(self):
@@ -159,7 +136,7 @@ class ConstructionBOQ(models.Model):
     @api.depends('boq_line_ids.budget_amount', 'currency_id')
     def _compute_total_budget(self):
         for rec in self:
-            # [FIX] Only sum actual lines, ignore sections/notes to prevent type errors
+            # Only sum actual lines, ignore sections/notes to prevent type errors
             lines = rec.boq_line_ids.filtered(lambda l: not l.display_type)
             rec.total_budget = sum(lines.mapped('budget_amount'))
 
@@ -170,7 +147,7 @@ class ConstructionBOQ(models.Model):
 
     # -- Workflow Actions --
     def action_submit(self):
-        # [FIX] Ensure we have actual product lines, not just sections
+        # Ensure we have actual product lines, not just sections
         boqs_with_valid_lines = self.filtered(lambda r: r.boq_line_ids.filtered(lambda l: not l.display_type))
         if len(boqs_with_valid_lines) != len(self):
             raise ValidationError(_('You cannot submit a BOQ with no product lines.'))
@@ -272,7 +249,7 @@ class ConstructionBOQ(models.Model):
             'message_follower_ids', 'state', 'approval_date', 'approved_by', 
             'active', 'total_budget', 'previous_boq_id', 'revision_ids', 
             'display_revision_ids', 'write_date', 'write_uid', 'name',
-            'quotation_template_id' # Don't version just for changing the dropdown
+            'sale_order_id' # Don't version just for linking fields
         ]
         
         has_business_changes = any(f not in ignore_fields for f in vals)
@@ -663,7 +640,7 @@ class ConstructionBOQConsumption(models.Model):
                 line = line_map[line_id]
                 # [FIX] Do not process consumption for Sections
                 if line.display_type:
-                       raise ValidationError(_("Cannot record consumption on a Section/Note BOQ line."))
+                        raise ValidationError(_("Cannot record consumption on a Section/Note BOQ line."))
 
                 qty = vals.get('quantity', 0.0)
                 amt = vals.get('amount', 0.0)
