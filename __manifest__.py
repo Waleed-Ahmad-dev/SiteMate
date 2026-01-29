@@ -28,7 +28,7 @@
         'views/account_move_views.xml',
         'views/boq_report_views.xml',
         'views/boq_line_views.xml',
-        'views/sale_order_template_views.xml',
+        'views/sale_order_views.xml', # [NEW] Added Sale Order View
     ],
     'installable': True,
     'application': True,
