@@ -26,13 +26,19 @@
             </field>
 
             <xpath expr="//field[@name='order_line']/list//field[@name='product_id']" position="before">
-                <field name="boq_line_id"
-                    optional="show"
+                <field name="boq_line_id" 
+                    optional="show" 
                     column_invisible="parent.purchase_type == 'normal'"
                     required="parent.purchase_type == 'boq'"
                     domain="[('boq_id', '=', parent.boq_id), ('display_type', '=', False)]"
                     options="{'no_create': True}"
                 />
+            </xpath>
+            
+            <xpath expr="//field[@name='order_line']/list//field[@name='product_id']" position="attributes">
+                <attribute name="domain">
+                    parent.purchase_type == 'boq' and [('id', 'in', parent.boq_id.boq_line_ids.product_id.ids)] or []
+                </attribute>
             </xpath>
         </field>
     </record>
