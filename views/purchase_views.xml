@@ -23,6 +23,8 @@
                     required="purchase_type == 'boq'"
                     options="{'no_create': True}"
                 />
+                
+                <field name="boq_product_ids" invisible="1"/>
             </field>
 
             <xpath expr="//field[@name='order_line']/list//field[@name='product_id']" position="before">
@@ -37,7 +39,7 @@
             
             <xpath expr="//field[@name='order_line']/list//field[@name='product_id']" position="attributes">
                 <attribute name="domain">
-                    parent.purchase_type == 'boq' and [('id', 'in', parent.boq_id.boq_line_ids.product_id.ids)] or []
+                    parent.purchase_type == 'boq' and [('id', 'in', parent.boq_product_ids)] or []
                 </attribute>
             </xpath>
         </field>
