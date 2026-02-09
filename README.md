@@ -130,4 +130,3 @@ This module requires the following Odoo Community/Enterprise modules:
 -   **"Expense Account is missing"**: The system cannot determine where to book the cost. Set an expense account on the Product or its Category.
 
 ---
-*Built for Odoo.*
