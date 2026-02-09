@@ -17,37 +17,37 @@ This module allows construction companies to:
 
 ## Key Features
 
-### 🏗️ BOQ Management
+### BOQ Management
 -   **Structure**: Organize BOQs by Project and Analytic Account.
 -   **Line Items**: Support for Sections, Notes, and Product Lines.
 -   **Cost Types**: Classify costs as Material, Labor, Subcontract, Service, or Overhead.
 -   **Workflow**: Robust state machine (Draft → Submitted → Approved → Locked → Closed).
 -   **Approvals**: Role-based approval workflow with validation gates (e.g., cannot approve without lines).
 
-### 🔄 Versioning & Revisions
+### Versioning & Revisions
 -   **Snapshots**: Automatic creation of immutable snapshots (v1, v2, etc.) upon major revisions.
 -   **Audit Trail**: Track who approved revisions, when, and why.
 -   **History View**: dedicated view to browse past versions of a BOQ for a specific project.
 -   **Comparison**: Active vs. Previous version tracking.
 
-### 💰 Budget Control
+### Budget Control
 -   **Estimation**: Define Budget Quantity and Budget Rate per line item.
 -   **Validation**: Prevent submission/approval of incomplete BOQs.
 -   **Total Budget**: Real-time computation of the total project budget based on active lines.
 
-### 🛒 Purchase Integration
+### Purchase Integration
 -   **BOQ Purchase Mode**: New "Purchase Mode" on Purchase Orders to differentiate project purchases from regular stock replenishment.
 -   **Line Linking**: Direct linking of Purchase Order Lines to specific BOQ Items.
 -   **Budget enforcement**: Automatic validation to ensure PO quantities do not exceed BOQ remaining quantities.
 -   **Project Alignment**: strict validation to ensure PO Project matches the BOQ Project.
 
-### 📦 Inventory & Consumption
+### Inventory & Consumption
 -   **Stock Moves**: Link Stock Moves (Delivery/Production outcomes) to BOQ Lines.
 -   **Valuation Override**: Automatically route stock valuation to the BOQ Line's configured Expense Account instead of default category accounts.
 -   **Consumption Ledger**: Comprehensive ledger (`construction.boq.consumption`) tracking every material consumption event.
 -   **Over-Consumption Protection**: Optional strict blocking of stock moves that exceed budget limits.
 
-### 📊 Project Integration
+### Project Integration
 -   **Activity Codes**: Map BOQ lines to Project Tasks via unique Activity Codes.
 -   **Analytic Distribution**: Automated propagation of Analytic Accounts to Journal Entries and Stock Moves.
 
@@ -130,4 +130,4 @@ This module requires the following Odoo Community/Enterprise modules:
 -   **"Expense Account is missing"**: The system cannot determine where to book the cost. Set an expense account on the Product or its Category.
 
 ---
-*Built with ❤️ for Odoo.*
+*Built for Odoo.*
