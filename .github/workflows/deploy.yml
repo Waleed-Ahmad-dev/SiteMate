@@ -1,4 +1,4 @@
-name: Deploy to Odoo Server
+name: Deploy SiteMate
 
 on:
   push:
@@ -16,27 +16,30 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "🚀 Starting Deployment..."
+            echo "🚀 Starting Deployment for SiteMate..."
 
-            # 1. Go to the folder
-            cd /root/odoo-projects/ELB/addons/entrpryz_construction_boq
+            # 1. Define the specific path for the NEW module
+            # We are assuming you will clone the renamed repo 'SiteMate' into this folder
+            PROJECT_PATH="/root/ELB/addons/SiteMate"
 
-            # ⬇️ NEW LINE: Tell Git to trust this folder!
-            git config --global --add safe.directory /root/odoo-projects/ELB/addons/entrpryz_construction_boq
+            # 2. Check if the folder exists (First time setup vs Update)
+            if [ ! -d "$PROJECT_PATH" ]; then
+              echo "📂 Folder not found. Cloning for the first time..."
+              mkdir -p /root/ELB/addons
+              cd /root/ELB/addons
+              # Clone the repo and name the folder 'SiteMate'
+              git clone https://github.com/Waleed-Ahmad-dev/SiteMate.git
+            fi
 
-            # Stash the changes before pulling the code
+            # 3. Go to the folder
+            cd $PROJECT_PATH
+
+            # 4. Git Safety & Pull
+            git config --global --add safe.directory $PROJECT_PATH
             git stash
-
-            # 2. Pull the latest code
             git pull origin main
 
-            # 3. Fix Permissions
-            echo "🔧 Fixing permissions..."
-            chown -R 101:101 /root/odoo-projects/ELB/addons/entrpryz_construction_boq
-            chmod -R 755 /root/odoo-projects/ELB/addons/entrpryz_construction_boq
-
-            # 4. Restart the Container
-            echo "🔄 Restarting Container..."
-            docker restart elb-entrpryz-one-p3390e-web-1
+            # 5. Restart Odoo (Update this container name after you set up the new server!)
+            docker restart elb-odoo18-uxsjjb-web-1
 
             echo "✅ Deployment Finished!"
