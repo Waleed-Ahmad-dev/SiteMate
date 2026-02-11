@@ -65,9 +65,9 @@
                                     <field name="description" column_invisible="1"/>
                                     <field name="expense_account_id" column_invisible="1"/>
 
-                                    <field name="section_id" invisible="display_type != 'line_section'" options="{'no_create': False}"/>
+                                    <field name="section_id" column_invisible="1" invisible="display_type != 'line_section'" options="{'no_create': False}"/>
 
-                                    <field name="name" widget="section_and_note_text" invisible="not display_type"/>
+                                    <field name="name" column_invisible="1" widget="section_and_note_text" invisible="not display_type"/>
 
                                     <field name="product_id" invisible="display_type" widget="many2one_avatar"/>
                                     <field name="quantity" invisible="display_type" string="Budget Qty"/>
