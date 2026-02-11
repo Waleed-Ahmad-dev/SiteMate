@@ -8,7 +8,7 @@
                 <field name="sequence" widget="handle"/>
                 <field name="display_type" invisible="1"/>
 
-                <field name="name" widget="section_and_note_text" invisible="not display_type"/>
+                <field name="name" column_invisible="1" widget="section_and_note_text" invisible="not display_type"/>
 
                 <field name="product_id" invisible="display_type != False" widget="many2one_avatar"/>
                 <field name="quantity" invisible="display_type != False" string="Budget Qty"/>
