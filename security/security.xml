@@ -2,8 +2,7 @@
 <odoo>
     <data>
         <record id="module_category_construction" model="ir.module.category">
-            <field name="name">Construction Management</field>
-            <field name="description">Manage Construction BOQs, Budgets, and Consumption.</field>
+            <field name="name">SiteMate Construction</field> <field name="description">Manage SiteMate BOQs, Budgets, and Consumption.</field>
             <field name="sequence">20</field>
         </record>
 
