@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 {
-    'name': 'Entrpryz Construction BOQ',
+    'name': 'SiteMate', 
     'version': '1.0',
     'category': 'Construction',
-    'summary': 'Construction BOQ Management',
+    'summary': 'SiteMate Construction Management',
     'author': 'Waleed Ahmad (Shadow Scripter)',
     'website': 'https://www.shadowscripter.online',
     'depends': [
