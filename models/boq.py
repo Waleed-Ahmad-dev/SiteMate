@@ -607,7 +607,7 @@ class ConstructionBOQLine(models.Model):
             'res_id': self.id,
             'views': [(False, 'form')],
             'target': 'new',
-            'context': {'form_view_ref': 'entrpryz_construction_boq.view_construction_boq_line_advanced_form'}
+            'context': {'form_view_ref': 'sitemate.view_construction_boq_line_advanced_form'}
         }
 
 class ConstructionBOQConsumption(models.Model):

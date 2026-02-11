@@ -69,7 +69,7 @@
                             <field name="consumed_amount" widget="monetary" readonly="1"/>
                             <field name="remaining_quantity" readonly="1"/>
                             <field name="remaining_amount" widget="monetary" readonly="1" string="Available Budget"/>
-                            <field name="allow_over_consumption" widget="boolean_toggle" groups="entrpryz_construction_boq.group_finance_head"/>
+                            <field name="allow_over_consumption" widget="boolean_toggle" groups="sitemate.group_finance_head"/>
                         </group>
 
                         <group string="Accounting">
@@ -111,6 +111,6 @@
         <field name="view_mode">form</field>
         <field name="target">new</field>
         <field name="view_id" ref="view_construction_boq_line_advanced_form"/>
-        <field name="context">{'form_view_ref': 'entrpryz_construction_boq.view_construction_boq_line_advanced_form'}</field>
+        <field name="context">{'form_view_ref': 'sitemate.view_construction_boq_line_advanced_form'}</field>
     </record>
 </odoo>

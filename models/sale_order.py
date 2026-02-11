@@ -46,12 +46,12 @@ class SaleOrder(models.Model):
         """
         self.ensure_one()
         boqs = self.boq_ids
-        action = self.env['ir.actions.act_window']._for_xml_id('entrpryz_construction_boq.action_construction_boq')
+        action = self.env['ir.actions.act_window']._for_xml_id('sitemate.action_construction_boq')
         
         if len(boqs) > 1:
             action['domain'] = [('id', 'in', boqs.ids)]
         elif boqs:
-            action['views'] = [(self.env.ref('entrpryz_construction_boq.view_construction_boq_form').id, 'form')]
+            action['views'] = [(self.env.ref('sitemate.view_construction_boq_form').id, 'form')]
             action['res_id'] = boqs.id
         
         # Pass default context for creating new BOQ from this view
