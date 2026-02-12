@@ -50,7 +50,11 @@
                     <notebook>
                         <page string="Budget Lines" name="lines">
                             <field name="boq_line_ids" widget="section_and_note_one2many" readonly="state == 'closed'">
-                                <list editable="bottom" decoration-danger="remaining_amount &lt; 0" decoration-warning="remaining_amount &lt; (budget_amount * 0.1)">
+                                <list editable="bottom" 
+                                      decoration-danger="remaining_amount &lt; 0" 
+                                      decoration-warning="remaining_amount &lt; (budget_amount * 0.1)"
+                                      decoration-success="is_complete">
+                                    
                                     <control>
                                         <create name="add_line_control" string="Add a line"/>
                                         <create name="add_section_control" string="Add a section" context="{'default_display_type': 'line_section'}"/>
@@ -59,6 +63,8 @@
 
                                     <field name="sequence" widget="handle"/>
                                     <field name="display_type" column_invisible="1"/>
+                                    
+                                    <field name="is_complete" column_invisible="1"/>
 
                                     <field name="boq_id" column_invisible="1"/>
                                     <field name="company_id" column_invisible="1"/>
@@ -71,6 +77,10 @@
 
                                     <field name="product_id" invisible="display_type" widget="many2one_avatar"/>
                                     <field name="quantity" invisible="display_type" string="Budget Qty"/>
+                                    
+                                    <field name="additional_quantity" optional="show" invisible="display_type"/>
+                                    <field name="ordered_quantity" optional="show" invisible="display_type" readonly="1"/>
+                                    
                                     <field name="uom_id" invisible="display_type" optional="show" string="UoM"/>
 
                                     <field name="estimated_rate" invisible="display_type" string="Budget Rate"/>
