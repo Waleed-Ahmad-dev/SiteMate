@@ -69,6 +69,30 @@ class PurchaseOrder(models.Model):
                 if order.boq_id.project_id != order.project_id:
                     raise ValidationError(_("The selected BOQ does not belong to the selected Project."))
 
+    # -------------------------------------------------------------------------
+    # Phase 3: Automation & Versioning
+    # -------------------------------------------------------------------------
+    def button_confirm(self):
+        """
+        Task 3.1: Trigger Versioning on PO Confirmation.
+        Automatically version the BOQ when a Purchase Order is confirmed 
+        to snapshot the state at that moment.
+        """
+        for order in self:
+            if order.purchase_type == 'boq' and order.boq_id:
+                # Create a revision snapshot of the BOQ *before* the PO is confirmed.
+                # This ensures we have a history of the BOQ state prior to this commitment.
+                order.boq_id.create_revision_snapshot()
+
+        # Task 3.2: Auto-Update BOQ Status
+        # Calling super() changes the PO line states to 'purchase'.
+        # This automatically triggers the compute dependency on construction.boq.line:
+        #   ordered_quantity (depends on purchase_line_ids.state)
+        #   -> remaining_quantity
+        #   -> is_complete
+        res = super(PurchaseOrder, self).button_confirm()
+        return res
+
 
 class PurchaseOrderLine(models.Model):
     _inherit = 'purchase.order.line'
