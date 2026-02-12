@@ -22,19 +22,21 @@ class PurchaseOrder(models.Model):
     )
 
     # [FIX] New Computed Field to allow Domain filtering in XML
-    # This fixes the "Invalid composed field" error in the view
     boq_product_ids = fields.Many2many(
         'product.product', 
         compute='_compute_boq_product_ids', 
         string="Allowed BOQ Products"
     )
 
-    @api.depends('boq_id.boq_line_ids.product_id')
+    # Task 2.2: Filter Products by BOQ Availability
+    @api.depends('boq_id.boq_line_ids.product_id', 'boq_id.boq_line_ids.is_complete')
     def _compute_boq_product_ids(self):
         for rec in self:
             if rec.boq_id:
-                # Get all products linked to the valid BOQ lines (ignoring sections)
-                rec.boq_product_ids = rec.boq_id.boq_line_ids.filtered(lambda l: not l.display_type).product_id
+                # Filter out BOQ lines that are sections OR are already complete
+                rec.boq_product_ids = rec.boq_id.boq_line_ids.filtered(
+                    lambda l: not l.display_type and not l.is_complete
+                ).product_id
             else:
                 rec.boq_product_ids = False
 
@@ -159,80 +161,73 @@ class PurchaseOrderLine(models.Model):
         if self.boq_line_id.analytic_distribution:
             self.analytic_distribution = self.boq_line_id.analytic_distribution
 
+    # Task 2.1: Enhance PO Line Constraints
     @api.constrains('product_qty', 'boq_line_id', 'order_id')
     def _check_boq_limit(self):
-        """Optimized constraint method with bulk operations"""
+        """
+        Phase 2 Gatekeeper: Enforce strict purchasing limits.
+        Formula: If (Total Ordered Quantity) > (BOQ Budget + Additional), Raise Error.
+        """
         
-        # Separate lines by purchase type and state for efficient processing
-        boq_lines = self.filtered(
-            lambda l: l.order_id.purchase_type == 'boq' and 
-                      l.state in ('draft', 'sent') and 
-                      l.boq_line_id
-        )
-        
+        # 1. Validation: Ensure all lines in BOQ mode have a BOQ Link
         normal_lines = self.filtered(
-            lambda l: l.order_id.purchase_type == 'boq' and 
-                      not l.boq_line_id
+            lambda l: l.order_id.purchase_type == 'boq' and \
+                      not l.boq_line_id and \
+                      l.state != 'cancel'
         )
-        
-        # Check for lines without BOQ in BOQ purchase mode
         if normal_lines:
             raise ValidationError(
                 _('For BOQ Purchases, every line must be linked to a BOQ Item.')
             )
+
+        # 2. Filter lines that require Limit Check
+        # We check lines that are BOQ Purchase, have a BOQ Line, Over-Consumption NOT allowed, and NOT cancelled.
+        lines_to_check = self.filtered(
+            lambda l: l.order_id.purchase_type == 'boq' and \
+                      l.boq_line_id and \
+                      not l.boq_line_id.allow_over_consumption and \
+                      l.state != 'cancel'
+        )
         
-        # Bulk fetch all related BOQ lines with their data
-        if boq_lines:
-            boq_line_ids = boq_lines.mapped('boq_line_id.id')
+        if not lines_to_check:
+            return
+
+        # 3. Group by BOQ Line to perform efficient bulk validation
+        # This handles cases where a user might add multiple lines for the same BOQ item in one order.
+        boq_line_ids = lines_to_check.mapped('boq_line_id')
+        
+        for boq_line in boq_line_ids:
+            # A. Calculate the Hard Limit
+            limit_qty = boq_line.quantity + boq_line.additional_quantity
             
-            # search_read cannot traverse relations in the fields list.
-            # We must use 'project_id' directly, as it exists on the line model (as a related field).
-            boq_data = self.env['construction.boq.line'].search_read(
-                [('id', 'in', boq_line_ids)],
-                ['id', 'remaining_quantity', 'allow_over_consumption', 
-                 'name', 'boq_id', 'project_id'] 
+            # B. Calculate Total Ordered Quantity (The "Consumed" part of the budget)
+            # We explicitly sum ALL non-cancelled PO lines in the system linked to this BOQ item.
+            # This includes the lines currently being saved (self), as constrains run after DB write.
+            domain = [
+                ('boq_line_id', '=', boq_line.id),
+                ('state', '!=', 'cancel')
+            ]
+            
+            # efficient read_group to sum 'product_qty'
+            result = self.env['purchase.order.line'].read_group(
+                domain, ['product_qty'], ['boq_line_id']
             )
+            total_ordered = result[0]['product_qty'] if result else 0.0
             
-            # Create lookup dictionaries for O(1) access
-            boq_by_id = {data['id']: data for data in boq_data}
-            
-            # Group lines by boq_line_id for efficient processing
-            lines_by_boq = defaultdict(list)
-            for line in boq_lines:
-                lines_by_boq[line.boq_line_id.id].append(line)
-            
-            # Check project alignment and quantity limits
-            for boq_line_id, lines in lines_by_boq.items():
-                boq_info = boq_by_id.get(boq_line_id)
-                if not boq_info:
-                    continue
-                
-                # Check project alignment for all lines at once
-                # Note: boq_info['project_id'] returns (ID, Name) tuple in search_read
-                project_mismatch_lines = [
-                    line for line in lines 
-                    if (line.order_id.project_id and 
-                        boq_info['project_id'] and 
-                        boq_info['project_id'][0] != line.order_id.project_id.id)
-                ]
-                
-                if project_mismatch_lines:
-                    raise ValidationError(
-                        _('The BOQ Line selected does not belong to the Project on the Purchase Order.')
-                    )
-                
-                # Check quantity limits for lines where over-consumption is not allowed
-                if not boq_info['allow_over_consumption']:
-                    remaining_qty = boq_info['remaining_quantity']
-                    
-                    # Calculate total quantity being purchased in this order for this specific BOQ line
-                    total_purchase_qty = sum(line.product_qty for line in lines)
-                    
-                    if total_purchase_qty > remaining_qty:
-                        raise ValidationError(
-                            _('Total Purchase Quantity (%s) exceeds BOQ Remaining Quantity (%s) for item %s.') % (
-                                total_purchase_qty,
-                                remaining_qty,
-                                boq_info['name']
-                            )
-                        )
+            # C. The Gatekeeper Check
+            # Use 0.0001 epsilon for floating point safety
+            if total_ordered > (limit_qty + 0.0001):
+                raise ValidationError(
+                    _('Purchasing Limit Exceeded for BOQ Item "%(name)s".\n'
+                      '------------------------------------------------\n'
+                      'Budget Qty: %(budget)s\n'
+                      'Additional Qty: %(additional)s\n'
+                      'Total Limit: %(limit)s\n'
+                      'Total Ordered (incl. this PO): %(ordered)s') % {
+                        'name': boq_line.name,
+                        'budget': boq_line.quantity,
+                        'additional': boq_line.additional_quantity,
+                        'limit': limit_qty,
+                        'ordered': total_ordered
+                    }
+                )
