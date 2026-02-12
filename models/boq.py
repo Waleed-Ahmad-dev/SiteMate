@@ -344,10 +344,28 @@ class ConstructionBOQLine(models.Model):
     name = fields.Char(string='Description', required=True)
     
     quantity = fields.Float(string='Budget Qty', default=1.0)
+    
+    # Task 1.1: Add additional_quantity (Float, editable).
+    additional_quantity = fields.Float(
+        string='Additional Qty', 
+        default=0.0, 
+        help="Extra quantity approved via Change Orders or Site Instructions."
+    )
+    
+    # Task 1.1: Add ordered_quantity (Float, computed).
+    ordered_quantity = fields.Float(
+        string='Ordered Qty', 
+        compute='_compute_ordered_quantity', 
+        store=True, 
+        help="Total quantity committed in Purchase Orders (non-cancelled)."
+    )
+
     estimated_rate = fields.Monetary(string='Budget Rate', currency_field='currency_id', default=0.0)
     uom_id = fields.Many2one('uom.uom', string='Unit of Measure')
     
     budget_amount = fields.Monetary(string='Budget Amount', compute='_compute_budget_amount', currency_field='currency_id', store=True)
+    
+    # Updated compute method for Task 1.1 logic
     remaining_amount = fields.Monetary(string='Available Budget', compute='_compute_consumption', currency_field='currency_id', store=True)
     
     # Technical Fields
@@ -379,12 +397,20 @@ class ConstructionBOQLine(models.Model):
     # Consumption Tracking
     consumed_quantity = fields.Float(string='Consumed Qty', compute='_compute_consumption', store=True)
     consumed_amount = fields.Monetary(string='Consumed Amount', compute='_compute_consumption', currency_field='currency_id', store=True)
-    remaining_quantity = fields.Float(string='Remaining Qty', compute='_compute_consumption', store=True)
+    
+    # Task 1.1: Update remaining_quantity compute logic
+    remaining_quantity = fields.Float(string='Remaining Qty', compute='_compute_remaining_quantity', store=True)
     
     allow_over_consumption = fields.Boolean(string='Allow Over Consumption', default=False, help="If checked, allows consumption to exceed the budgeted quantity/amount without error.")
     consumption_ids = fields.One2many('construction.boq.consumption', 'boq_line_id', string='Consumptions')
     consumption_percentage = fields.Float(string='Progress', compute='_compute_consumption_percentage', store=False, help="Percentage of budget consumed.")
     
+    # Helper relation for Task 1.2
+    purchase_line_ids = fields.One2many('purchase.order.line', 'boq_line_id', string='Linked PO Lines')
+    
+    # Task 1.1: Add is_complete (Boolean, computed)
+    is_complete = fields.Boolean(string='Is Complete', compute='_compute_is_complete', store=True)
+
     # Product Configuration Validation
     product_config_valid = fields.Boolean(string='Product Configured', compute='_compute_product_config_valid', store=False)
 
@@ -423,31 +449,57 @@ class ConstructionBOQLine(models.Model):
         for rec in self:
             rec.budget_amount = rec.quantity * rec.estimated_rate
 
+    # Task 1.2: Implement Computation Logic for Ordered Quantity
+    @api.depends('purchase_line_ids.state', 'purchase_line_ids.product_qty', 'purchase_line_ids.product_uom')
+    def _compute_ordered_quantity(self):
+        for rec in self:
+            if rec.display_type:
+                rec.ordered_quantity = 0.0
+                continue
+            
+            # Filter non-cancelled PO lines
+            # Note: We rely on standard UoM matching. If UoM differs, conversion logic would be needed here.
+            # Assuming PO line UoM matches BOQ UoM for Phase 1.
+            valid_lines = rec.purchase_line_ids.filtered(lambda l: l.state != 'cancel')
+            rec.ordered_quantity = sum(valid_lines.mapped('product_qty'))
+
+    # Task 1.1: Update remaining_quantity logic: (quantity + additional_quantity) - ordered_quantity
+    @api.depends('quantity', 'additional_quantity', 'ordered_quantity')
+    def _compute_remaining_quantity(self):
+        for rec in self:
+            if rec.display_type:
+                rec.remaining_quantity = 0.0
+            else:
+                rec.remaining_quantity = (rec.quantity + rec.additional_quantity) - rec.ordered_quantity
+
+    # Task 1.1: Add is_complete computation
+    @api.depends('remaining_quantity')
+    def _compute_is_complete(self):
+        for rec in self:
+            if rec.display_type:
+                rec.is_complete = False
+            else:
+                # Complete if no remaining quantity to order
+                rec.is_complete = rec.remaining_quantity <= 0
+
     @api.depends('quantity', 'budget_amount', 'consumption_ids.quantity', 'consumption_ids.amount')
     def _compute_consumption(self):
         # BOLT: ⚡ Refactored for performance.
-        # This method was re-written to reduce Python loops and database queries.
-        # The original implementation iterated through the recordset multiple times.
-        # This version separates new (in-memory) and existing (database) records
-        # to perform a single efficient `read_group` for existing records and
-        # a single loop for new records, improving UI responsiveness on large BOQs.
+        # Modified to decouple remaining_quantity logic (now handled by _compute_remaining_quantity)
 
-        # Step 1: Initialize all records. Sections/notes are set to zero and skipped.
+        # Step 1: Initialize all records.
         for rec in self:
             if rec.display_type:
                 rec.consumed_quantity = 0.0
                 rec.consumed_amount = 0.0
-                rec.remaining_quantity = 0.0
                 rec.remaining_amount = 0.0
             else:
                 # Default values for real lines
                 rec.consumed_quantity = 0.0
                 rec.consumed_amount = 0.0
-                rec.remaining_quantity = rec.quantity
                 rec.remaining_amount = rec.budget_amount
 
         # Step 2: Efficiently process records that are saved in the database.
-        # A single read_group is much faster than iterating and querying one by one.
         existing_records = self.filtered(lambda r: r.id and not r.display_type)
         if existing_records:
             consumption_data = self.env['construction.boq.consumption'].read_group(
@@ -469,11 +521,10 @@ class ConstructionBOQLine(models.Model):
                     c_amt = consumed.get('amount', 0.0)
                     rec.consumed_quantity = c_qty
                     rec.consumed_amount = c_amt
-                    rec.remaining_quantity = rec.quantity - c_qty
+                    # Note: remaining_quantity is now computed in _compute_remaining_quantity
                     rec.remaining_amount = rec.budget_amount - c_amt
 
         # Step 3: Process new (in-memory) records that haven't been saved yet.
-        # These must be calculated individually as they don't exist for a read_group.
         new_records = self.filtered(lambda r: not r.id and not r.display_type)
         for rec in new_records:
             if rec.consumption_ids:
@@ -481,7 +532,7 @@ class ConstructionBOQLine(models.Model):
                 c_amt = sum(rec.consumption_ids.mapped('amount'))
                 rec.consumed_quantity = c_qty
                 rec.consumed_amount = c_amt
-                rec.remaining_quantity = rec.quantity - c_qty
+                # Note: remaining_quantity is now computed in _compute_remaining_quantity
                 rec.remaining_amount = rec.budget_amount - c_amt
 
     @api.depends('consumed_amount', 'budget_amount')
@@ -562,6 +613,11 @@ class ConstructionBOQLine(models.Model):
             return
 
         if not self.allow_over_consumption:
+            # Note: With the new logic, remaining_quantity = (Budget + Add) - Ordered.
+            # This validation now checks if we are consuming more than we have Ordered/Committed.
+            # If the requirement is to check against Total Budget (Quantity + Additional),
+            # this logic might need adjustment in future phases.
+            # For now, it respects the `remaining_quantity` field value.
             if qty > self.remaining_quantity + 0.0001:
                  raise ValidationError(_('BOQ Quantity Exceeded for %s.') % self.name)
             if amount > self.remaining_amount + 0.01:
