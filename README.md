@@ -75,51 +75,51 @@ This module requires the following Odoo Community/Enterprise modules:
 
 ### Configuration
 
-1.  **Analytic Accounts**: Ensure your Projects have Analytic Accounts configured, as the BOQ relies on them for cost tracking.
-2.  **Product Setup**: Products used in BOQ lines **must** have:
+1. **Analytic Accounts**: Ensure your Projects have Analytic Accounts configured, as the BOQ relies on them for cost tracking.
+2. **Product Setup**: Products used in BOQ lines **must** have:
     - A valid Unit of Measure.
     - A Standard Price (for budget estimation defaults).
     - An Expense Account (or Category Expense Account).
-3.  **User Access**: Ensure relevant users have access to Construction/Project, Purchase, and Inventory apps.
+3. **User Access**: Ensure relevant users have access to Construction/Project, Purchase, and Inventory apps.
 
 ## Usage Workflow
 
 ### 1. Create a BOQ
 
-1.  Navigate to **Construction > BOQs**.
-2.  Click **New**.
-3.  Select a **Project** (Analytic Account auto-fills).
-4.  Add **BOQ Lines**:
+1. Navigate to **Construction > BOQs**.
+2. Click **New**.
+3. Select a **Project** (Analytic Account auto-fills).
+4. Add **BOQ Lines**:
     - Use "Add Section" to organize items (e.g., "Foundation", "Electrical").
     - Add Products, set **Budget Qty** and **Budget Rate**.
-5.  **Submit** the BOQ for review.
-6.  **Approve** the BOQ to make it active.
+5. **Submit** the BOQ for review.
+6. **Approve** the BOQ to make it active.
 
 ### 2. Purchasing Materials
 
-1.  Create a **Purchase Order**.
-2.  Set **Purchase Mode** to "BOQ Purchase".
-3.  Select the **Project** and the active **BOQ**.
-4.  Add Products. In the order line, select the specific **BOQ Item**.
+1. Create a **Purchase Order**.
+2. Set **Purchase Mode** to "BOQ Purchase".
+3. Select the **Project** and the active **BOQ**.
+4. Add Products. In the order line, select the specific **BOQ Item**.
     - _Note: Only BOQ lines matching the product will appear._
-5.  Confirm Order. Odoo checks if the requested quantity allows for the remaining budget.
+5. Confirm Order. Odoo checks if the requested quantity allows for the remaining budget.
 
 ### 3. Consuming Materials (Stock)
 
-1.  Process the **Delivery/Receipt** associated with the User/Project.
-2.  On the Stock Move, ensure the **BOQ Line** is linked (auto-linked from PO).
-3.  **Validate** the transfer.
+1. Process the **Delivery/Receipt** associated with the User/Project.
+2. On the Stock Move, ensure the **BOQ Line** is linked (auto-linked from PO).
+3. **Validate** the transfer.
     - The system validates if `Consumed Qty + New Qty <= Budget Qty`.
     - If valid, a **Consumption Record** is created.
     - Accounting entries are generated with the correct Analytic Distribution and Expense Account.
 
 ### 4. Revising a BOQ
 
-1.  Open an **Approved** or **Locked** BOQ.
-2.  Click **Revise**.
-3.  The system archives the current version (e.g., v1) as a read-only snapshot.
-4.  The current record becomes a **Draft** (v2) ready for editing.
-5.  Modify lines/quantities and re-submit for approval.
+1. Open an **Approved** or **Locked** BOQ.
+2. Click **Revise**.
+3. The system archives the current version (e.g., v1) as a read-only snapshot.
+4. The current record becomes a **Draft** (v2) ready for editing.
+5. Modify lines/quantities and re-submit for approval.
 
 ## Technical Architecture
 
